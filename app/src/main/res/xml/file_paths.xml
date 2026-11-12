@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path
+        name="proof_pdfs"
+        path="pdfs/" />
+    <files-path
+        name="proof_images"
+        path="images/" />
+    <files-path
+        name="all_files"
+        path="." />
+    <cache-path
+        name="shared_cache"
+        path="." />
+</paths>
