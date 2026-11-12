@@ -19,7 +19,7 @@ enum class ProofMode(
         id = "PACKAGE_SHIPPING",
         title = "Paket-Versand & Verkauf",
         shortTitle = "Paket & Verkauf",
-        description = "3 Pflicht-Schritte ohne Unterbrechung der Sensorkette: Ware & Seriennummer -> Einpacken & Verschließen -> Versandetikett & Barcode.",
+        description = "3 Pflicht-Schritte ohne Unterbrechung der Sensorkette: Ware & Seriennummer → Einpacken & Verschließen → Versandetikett & Barcode.",
         primaryValueLabel = "Sendungsnummer / Seriennummer",
         primaryValueHint = "Wird per ML Kit Barcode & OCR automatisch erkannt",
         minRequiredKeyframes = 4,

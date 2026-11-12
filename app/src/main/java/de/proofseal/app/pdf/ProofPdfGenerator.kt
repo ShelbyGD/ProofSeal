@@ -450,7 +450,7 @@ object ProofPdfGenerator {
             textSize = 7.5f
         }
         canvas.drawText(
-            "Protokoll-Hash (SHA-256): ${req.cryptoSeal.payloadSha256Hex} • Fortsetzung & Signatur auf Seite 2 ->",
+            "Protokoll-Hash (SHA-256): ${req.cryptoSeal.payloadSha256Hex} • Fortsetzung & Signatur auf Seite 2 →",
             MARGIN,
             PAGE_HEIGHT - 14f,
             footerPaint

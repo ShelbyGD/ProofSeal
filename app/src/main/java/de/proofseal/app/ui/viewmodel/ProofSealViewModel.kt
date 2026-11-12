@@ -1,6 +1,7 @@
 package de.proofseal.app.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
@@ -16,6 +17,7 @@ import de.proofseal.app.pdf.PdfGenerationRequest
 import de.proofseal.app.pdf.ProofPdfGenerator
 import de.proofseal.app.sensor.SensorChainRecorder
 import de.proofseal.app.sensor.SensorLiveSnapshot
+import de.proofseal.app.ui.theme.AppThemeMode
 import de.proofseal.app.util.LocationHelper
 import de.proofseal.app.util.MlKitAnalyzerHelper
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -72,10 +75,17 @@ data class SealVerificationResult(
     val errorReason: String? = null
 )
 
+data class SystemPreferencesUiState(
+    val useDynamicColor: Boolean = false,
+    val themeMode: AppThemeMode = AppThemeMode.DARK,
+    val defaultWitnessName: String = ""
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProofSealViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appContext = application.applicationContext
+    private val uiPrefs = appContext.getSharedPreferences("proofseal_ui_prefs", Context.MODE_PRIVATE)
     private val dao = ProofDatabase.getInstance(appContext).proofRecordDao()
     val cryptoManager = HardwareCryptoManager(appContext)
     private val sensorRecorder = SensorChainRecorder(appContext)
@@ -85,10 +95,24 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
     private val _hardwareInfo = MutableStateFlow(HardwareKeystoreInfo())
     val hardwareInfo: StateFlow<HardwareKeystoreInfo> = _hardwareInfo.asStateFlow()
 
+    private val _uiPreferences = MutableStateFlow(
+        SystemPreferencesUiState(
+            useDynamicColor = uiPrefs.getBoolean("use_dynamic_color", false),
+            themeMode = runCatching {
+                AppThemeMode.valueOf(uiPrefs.getString("theme_mode", AppThemeMode.DARK.name) ?: AppThemeMode.DARK.name)
+            }.getOrDefault(AppThemeMode.DARK),
+            defaultWitnessName = uiPrefs.getString("default_witness_name", "") ?: ""
+        )
+    )
+    val uiPreferences: StateFlow<SystemPreferencesUiState> = _uiPreferences.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    val records: StateFlow<List<ProofRecordEntity>> = _searchQuery
+    private val _selectedModeFilter = MutableStateFlow<String?>(null)
+    val selectedModeFilter: StateFlow<String?> = _selectedModeFilter.asStateFlow()
+
+    private val baseRecordsFlow = _searchQuery
         .flatMapLatest { query ->
             if (query.isBlank()) {
                 dao.getAllRecords()
@@ -96,11 +120,21 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                 dao.searchRecords(query.trim())
             }
         }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+
+    val records: StateFlow<List<ProofRecordEntity>> = combine(
+        baseRecordsFlow,
+        _selectedModeFilter
+    ) { list, modeFilter ->
+        if (modeFilter.isNullOrBlank()) {
+            list
+        } else {
+            list.filter { it.modeId == modeFilter }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
 
     private val _captureState = MutableStateFlow(CaptureSessionUiState())
     val captureState: StateFlow<CaptureSessionUiState> = _captureState.asStateFlow()
@@ -120,8 +154,27 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun setUseDynamicColor(enabled: Boolean) {
+        uiPrefs.edit().putBoolean("use_dynamic_color", enabled).apply()
+        _uiPreferences.update { it.copy(useDynamicColor = enabled) }
+    }
+
+    fun setThemeMode(mode: AppThemeMode) {
+        uiPrefs.edit().putString("theme_mode", mode.name).apply()
+        _uiPreferences.update { it.copy(themeMode = mode) }
+    }
+
+    fun setDefaultWitnessName(name: String) {
+        uiPrefs.edit().putString("default_witness_name", name).apply()
+        _uiPreferences.update { it.copy(defaultWitnessName = name) }
+    }
+
     fun updateSearchQuery(newQuery: String) {
         _searchQuery.value = newQuery
+    }
+
+    fun updateModeFilter(modeId: String?) {
+        _selectedModeFilter.value = modeId
     }
 
     fun startNewCaptureSession(mode: ProofMode) {
@@ -138,7 +191,7 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
             capturedKeyframes = emptyList(),
             protocolTitle = defaultTitle,
             primaryOcrValue = "",
-            witnessName = "",
+            witnessName = _uiPreferences.value.defaultWitnessName,
             userNotes = "",
             gpsLocationText = gps,
             liveOcrPreviewHint = "",
@@ -193,13 +246,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         sensorRecorder.stopRecording()
     }
 
-    /**
-     * Verarbeitet das aufgenommene Keyframe-Bitmap:
-     * 1. Speichert komprimiertes Bild im internen App-Speicher und berechnet den individuellen Bild-SHA256.
-     * 2. Markiert den exakten Millisekunden-Offset in der laufenden Sensorkette.
-     * 3. Führt On-Device ML Kit OCR & Barcode-Scanning aus.
-     * 4. Schaltet automatisch zum nächsten Beweisschritt weiter.
-     */
     fun processCapturedKeyframeBitmap(bitmap: Bitmap) {
         val currentState = _captureState.value
         if (currentState.isCapturingKeyframe || currentState.isSealingProtocol) return
@@ -219,7 +265,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                 val motionVec = sensorRecorder.getCurrentMotionVector()
 
                 val newKeyframe = withContext(Dispatchers.IO) {
-                    // 1. JPEG-Komprimierung & SHA-256 Berechnung
                     val baos = ByteArrayOutputStream()
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 84, baos)
                     val jpegBytes = baos.toByteArray()
@@ -232,7 +277,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     FileOutputStream(imgFile).use { it.write(jpegBytes) }
 
-                    // 2. ML Kit On-Device OCR & Barcode-Analyse
                     val mlResult = MlKitAnalyzerHelper.analyzeCapturedBitmap(bitmap, currentState.mode)
 
                     CapturedKeyframe(
@@ -258,8 +302,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                     val updatedList = state.capturedKeyframes + newKeyframe
                     val nextStepIdx = updatedList.size.coerceAtMost(state.mode.maxKeyframes - 1)
 
-                    // Übernehme neu erkannten Barcode oder OCR-Hauptwert automatisch,
-                    // insbesondere im letzten Schritt (Versandlabel) oder wenn noch leer
                     val newPrimaryValue = when {
                         newKeyframe.detectedBarcodes.isNotEmpty() ->
                             newKeyframe.detectedBarcodes.first()
@@ -293,11 +335,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Beendet die lückenlose Sensorkette, prüft die 3D-Parallaxe & Kontinuität,
-     * signiert das Gesamtpaket mit dem Android Hardware-Keystore (StrongBox/TEE),
-     * generiert das 2-seitige WhatsApp-feste DIN-A4 PDF und speichert alles in Room.
-     */
     fun finalizeAndSealProtocol(onSealedSuccess: (String) -> Unit) {
         val state = _captureState.value
         if (state.isSealingProtocol || state.capturedKeyframes.isEmpty()) return
@@ -307,7 +344,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 val createdRecordId = withContext(Dispatchers.IO) {
-                    // 1. Sensorkette beenden & Integritätsbericht berechnen
                     val sensorReport = sensorRecorder.stopRecording()
 
                     val nowInstant = Instant.now()
@@ -320,7 +356,7 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                     val endSec = sensorReport.endElapsedNanos / 1_000_000_000.0
                     val uptimeSpanFormatted = String.format(
                         Locale.US,
-                        "%.2fs -> %.2fs (Δ %.2fs)",
+                        "%.2fs → %.2fs (Δ %.2fs)",
                         startSec,
                         endSec,
                         sensorReport.durationSeconds
@@ -344,7 +380,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     val effectiveTitle = state.protocolTitle.trim().ifBlank { state.mode.title }
 
-                    // 2. Kanonisches Beweispaket bauen & im Hardware-Keystore signieren
                     val canonicalBytes = cryptoManager.buildCanonicalEvidencePayload(
                         protocolId = state.protocolId,
                         modeId = state.mode.id,
@@ -360,7 +395,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
 
                     val cryptoSeal = cryptoManager.signPayload(canonicalBytes)
 
-                    // 3. 2-Seiten DIN-A4 Beweis-PDF generieren
                     val pdfReq = PdfGenerationRequest(
                         protocolId = state.protocolId,
                         title = effectiveTitle,
@@ -381,7 +415,6 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     val pdfFile = ProofPdfGenerator.generateProofPdf(appContext, pdfReq)
 
-                    // 4. JSON-Serialisierung der Keyframes & Sensorpunkte für Room
                     val kfJsonArr = JSONArray()
                     state.capturedKeyframes.forEach { kfJsonArr.put(it.toJson()) }
 

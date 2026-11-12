@@ -9,7 +9,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -25,28 +25,35 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -64,32 +71,55 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import de.proofseal.app.ui.theme.AmberContainer
-import de.proofseal.app.ui.theme.AmberWarning
-import de.proofseal.app.ui.theme.AnthraciteBorder
-import de.proofseal.app.ui.theme.AnthraciteCard
-import de.proofseal.app.ui.theme.AnthraciteDeep
-import de.proofseal.app.ui.theme.AnthraciteSurface
-import de.proofseal.app.ui.theme.CrimsonAlert
-import de.proofseal.app.ui.theme.CrimsonContainer
-import de.proofseal.app.ui.theme.CyanTelemetry
-import de.proofseal.app.ui.theme.EmeraldBright
-import de.proofseal.app.ui.theme.EmeraldContainer
-import de.proofseal.app.ui.theme.EmeraldPrimary
-import de.proofseal.app.ui.theme.TextOffWhite
-import de.proofseal.app.ui.theme.TextSlateMuted
 import de.proofseal.app.ui.viewmodel.ProofSealViewModel
 import de.proofseal.app.ui.viewmodel.SealVerificationResult
 import de.proofseal.app.util.MlKitAnalyzerHelper
 import java.util.concurrent.Executors
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SealVerifierScreen(
     viewModel: ProofSealViewModel,
     onNavigateBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        text = "Echtheits-Prüfer",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Zurück"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
+        SealVerifierTabContent(
+            viewModel = viewModel,
+            modifier = Modifier.padding(innerPadding)
+        )
+    }
+}
+
+@Composable
+fun SealVerifierTabContent(
+    viewModel: ProofSealViewModel,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -114,7 +144,6 @@ fun SealVerifierScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.clearVerificationResult()
         if (!hasCameraPermission) {
             camPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
@@ -127,240 +156,284 @@ fun SealVerifierScreen(
         }
     }
 
-    Scaffold(
-        containerColor = AnthraciteDeep
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Header-Info-Card im Material 3 Tonal-Stil
+        FilledTonalCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.filledTonalCardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+            )
         ) {
-            // 1. Top-Header
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onNavigateBack) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Zurück",
-                        tint = TextOffWhite
-                    )
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.width(4.dp))
-                Column {
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "ECHTHEITS-PRÜFER (QR & ECDSA)",
-                        color = TextOffWhite,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = "Kryptografischer Siegel-Prüfer",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Mathematische Signaturprüfung nach SHA256withECDSA (secp256r1)",
-                        color = EmeraldBright,
-                        fontSize = 11.5.sp
+                        text = "Prüft QR-Siegel von ProofSeal-PDFs mathematisch via SHA256withECDSA (secp256r1).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
+        }
 
-            // 2. Live-QR-Scanner-Kamera (wenn noch kein Scan-Ergebnis vorliegt)
-            if (verificationResult == null) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-                    border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.55f))
+        // 2. Live-Kamera-Sucher oder Verifikations-Ergebnis
+        if (verificationResult == null) {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.QrCodeScanner,
-                                contentDescription = null,
-                                tint = EmeraldBright,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "LIVE-KAMERA AUF PROOFSEAL-PDF QR-CODE RICHTEN",
-                                color = EmeraldBright,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Kamera-Scanner",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        AssistChip(
+                            onClick = {},
+                            label = { Text("On-Device ML Kit") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.VerifiedUser,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            shape = RoundedCornerShape(50)
+                        )
+                    }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(230.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .border(1.dp, AnthraciteBorder, RoundedCornerShape(12.dp))
-                                .background(Color.Black),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (hasCameraPermission) {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx ->
-                                        val previewView = PreviewView(ctx).apply {
-                                            scaleType = PreviewView.ScaleType.FILL_CENTER
-                                        }
-                                        val providerFuture = ProcessCameraProvider.getInstance(ctx)
-                                        providerFuture.addListener({
-                                            try {
-                                                val cameraProvider = providerFuture.get()
-                                                val preview = Preview.Builder().build().also {
-                                                    it.setSurfaceProvider(previewView.surfaceProvider)
-                                                }
-                                                val analysis = ImageAnalysis.Builder()
-                                                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                                    .build()
-                                                    .also { imgAnalysis ->
-                                                        imgAnalysis.setAnalyzer(
-                                                            qrExecutor,
-                                                            MlKitAnalyzerHelper.createLiveQrScannerAnalyzer { rawQr ->
-                                                                manualJsonInput = rawQr
-                                                                viewModel.verifyScannedQrContent(rawQr)
-                                                            }
-                                                        )
-                                                    }
-                                                cameraProvider.unbindAll()
-                                                cameraProvider.bindToLifecycle(
-                                                    lifecycleOwner,
-                                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                                    preview,
-                                                    analysis
-                                                )
-                                            } catch (_: Exception) {
-                                            }
-                                        }, ContextCompat.getMainExecutor(ctx))
-                                        previewView
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(250.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (hasCameraPermission) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx ->
+                                    val previewView = PreviewView(ctx).apply {
+                                        scaleType = PreviewView.ScaleType.FILL_CENTER
                                     }
-                                )
+                                    val providerFuture = ProcessCameraProvider.getInstance(ctx)
+                                    providerFuture.addListener({
+                                        try {
+                                            val cameraProvider = providerFuture.get()
+                                            val preview = Preview.Builder().build().also {
+                                                it.setSurfaceProvider(previewView.surfaceProvider)
+                                            }
+                                            val analysis = ImageAnalysis.Builder()
+                                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                                .build()
+                                                .also { imgAnalysis ->
+                                                    imgAnalysis.setAnalyzer(
+                                                        qrExecutor,
+                                                        MlKitAnalyzerHelper.createLiveQrScannerAnalyzer { rawQr ->
+                                                            manualJsonInput = rawQr
+                                                            viewModel.verifyScannedQrContent(rawQr)
+                                                        }
+                                                    )
+                                                }
+                                            cameraProvider.unbindAll()
+                                            cameraProvider.bindToLifecycle(
+                                                lifecycleOwner,
+                                                CameraSelector.DEFAULT_BACK_CAMERA,
+                                                preview,
+                                                analysis
+                                            )
+                                        } catch (_: Exception) {
+                                        }
+                                    }, ContextCompat.getMainExecutor(ctx))
+                                    previewView
+                                }
+                            )
 
-                                // Grüner QR-Scan-Rahmen
-                                Box(
-                                    modifier = Modifier
-                                        .size(150.dp)
-                                        .border(2.dp, EmeraldBright, RoundedCornerShape(14.dp))
+                            // Moderner abgerundeter Zielrahmen im Kamera-Overlay
+                            Box(
+                                modifier = Modifier
+                                    .size(168.dp)
+                                    .border(
+                                        width = 3.dp,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                                        shape = RoundedCornerShape(24.dp)
+                                    )
+                            )
+
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 12.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Text(
+                                    text = "QR-Siegel von Seite 2 des PDFs im Rahmen zentrieren",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                                 )
-                            } else {
+                            }
+                        } else {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.padding(20.dp)
+                            ) {
+                                Text(
+                                    text = "Kamera-Zugriff für QR-Scan benötigt",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White
+                                )
                                 Button(
                                     onClick = { camPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                                    shape = RoundedCornerShape(50)
                                 ) {
-                                    Text("Kamera für QR-Scanner freigeben", color = Color(0xFF022C22))
+                                    Text("Kamera aktivieren")
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                // 3. Zertifikats-Prüfergebnis-Karte
-                VerificationResultDetailCard(
-                    result = verificationResult!!,
-                    onResetScanner = {
-                        viewModel.clearVerificationResult()
-                    },
-                    onSimulateTamper = {
-                        val orig = verificationResult?.payload
-                        if (orig != null) {
-                            val tamperedHash = if (orig.payloadHash.startsWith("a")) {
-                                "b" + orig.payloadHash.drop(1)
-                            } else {
-                                "a" + orig.payloadHash.drop(1)
-                            }
-                            val tamperedPayload = orig.copy(payloadHash = tamperedHash)
-                            val tamperedJson = tamperedPayload.toCompactJson()
-                            manualJsonInput = tamperedJson
-                            viewModel.verifyScannedQrContent(tamperedJson)
-                        }
-                    }
-                )
             }
+        } else {
+            VerificationResultMaterial3Card(
+                result = verificationResult!!,
+                onResetScanner = {
+                    viewModel.clearVerificationResult()
+                },
+                onSimulateTamper = {
+                    val orig = verificationResult?.payload
+                    if (orig != null) {
+                        val tamperedHash = if (orig.payloadHash.startsWith("a")) {
+                            "b" + orig.payloadHash.drop(1)
+                        } else {
+                            "a" + orig.payloadHash.drop(1)
+                        }
+                        val tamperedPayload = orig.copy(payloadHash = tamperedHash)
+                        val tamperedJson = tamperedPayload.toCompactJson()
+                        manualJsonInput = tamperedJson
+                        viewModel.verifyScannedQrContent(tamperedJson)
+                    }
+                }
+            )
+        }
 
-            // 4. Direktprüfung eines lokal gespeicherten Protokolls oder manueller JSON-Import
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-                border = BorderStroke(1.dp, AnthraciteBorder)
+        // 3. Direkt-Prüfung & Selbsttest Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                Text(
+                    text = "Direkt-Prüfung & Einzelgerät-Selbsttest",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Teste ein lokal gespeichertes Protokoll oder füge den JSON-Inhalt eines QR-Siegels manuell ein.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (savedRecords.isNotEmpty()) {
+                    val latest = savedRecords.first()
+                    FilledTonalButton(
+                        onClick = {
+                            val qrJson = latest.toQrSealPayload().toCompactJson()
+                            manualJsonInput = qrJson
+                            viewModel.verifyScannedQrContent(qrJson)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VerifiedUser,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Letztes eigenes Protokoll (${latest.title}) prüfen",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = manualJsonInput,
+                    onValueChange = { manualJsonInput = it },
+                    label = { Text("QR-Siegel JSON-Payload") },
+                    placeholder = { Text("{\"app\":\"ProofSeal\",\"v\":1,\"hash\":\"…\"}") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(16.dp)
+                )
+
+                Button(
+                    onClick = { viewModel.verifyScannedQrContent(manualJsonInput) },
+                    enabled = manualJsonInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
                     Text(
-                        text = "DIREKT-PRÜFUNG & SELBSTTEST (AUCH AUF EINZELGERÄT)",
-                        color = TextOffWhite,
-                        fontSize = 12.5.sp,
+                        text = "ECDSA-Signatur mathematisch verifizieren",
                         fontWeight = FontWeight.Bold
                     )
-
-                    if (savedRecords.isNotEmpty()) {
-                        val latest = savedRecords.first()
-                        OutlinedButton(
-                            onClick = {
-                                val qrJson = latest.toQrSealPayload().toCompactJson()
-                                manualJsonInput = qrJson
-                                viewModel.verifyScannedQrContent(qrJson)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.6f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.VerifiedUser,
-                                contentDescription = null,
-                                tint = EmeraldBright,
-                                modifier = Modifier.size(17.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Letztes eigenes Protokoll kryptografisch prüfen",
-                                color = EmeraldBright,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = manualJsonInput,
-                        onValueChange = { manualJsonInput = it },
-                        label = { Text("QR-Siegel JSON-Payload (optional manuell einfügen)") },
-                        placeholder = { Text("{\"app\":\"ProofSeal\",\"v\":1,\"hash\":\"…\",\"sig\":\"…\",\"pub\":\"…\"}") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        maxLines = 4,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = EmeraldPrimary,
-                            unfocusedBorderColor = AnthraciteBorder,
-                            focusedTextColor = TextOffWhite,
-                            unfocusedTextColor = TextOffWhite
-                        )
-                    )
-
-                    Button(
-                        onClick = { viewModel.verifyScannedQrContent(manualJsonInput) },
-                        enabled = manualJsonInput.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = EmeraldPrimary,
-                            contentColor = Color(0xFF022C22)
-                        )
-                    ) {
-                        Text(
-                            text = "ECDSA-SIGNATUR MATHEMATISCH PRÜFEN",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 12.sp
-                        )
-                    }
                 }
             }
         }
@@ -368,60 +441,79 @@ fun SealVerifierScreen(
 }
 
 @Composable
-private fun VerificationResultDetailCard(
+private fun VerificationResultMaterial3Card(
     result: SealVerificationResult,
     onResetScanner: () -> Unit,
     onSimulateTamper: () -> Unit
 ) {
     val isValid = result.isValidSignature
-    val containerCol = if (isValid) EmeraldContainer else CrimsonContainer
-    val accentCol = if (isValid) EmeraldBright else CrimsonAlert
+    val bannerContainer = if (isValid) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.errorContainer
+    }
+    val bannerContent = if (isValid) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onErrorContainer
+    }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-        border = BorderStroke(2.dp, accentCol)
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        shape = RoundedCornerShape(24.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                color = containerCol,
-                shape = RoundedCornerShape(10.dp),
+                color = bannerContainer,
+                contentColor = bannerContent,
+                shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (isValid) Icons.Default.CheckCircle else Icons.Default.Error,
-                        contentDescription = null,
-                        tint = accentCol,
-                        modifier = Modifier.size(30.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = bannerContent.copy(alpha = 0.15f),
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isValid) Icons.Default.CheckCircle else Icons.Default.Error,
+                                contentDescription = null,
+                                tint = bannerContent,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
                             text = if (isValid) {
-                                "KRYPTOGRAFISCHE SIGNATUR VERIFIZIERT"
+                                "Signatur mathematisch gültig"
                             } else {
-                                "SIGNATURBRUCH / MANIPULATION ERKANNT!"
+                                "Signaturbruch erkannt!"
                             },
-                            color = accentCol,
-                            fontSize = 14.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
                             text = if (isValid) {
-                                "ECDSA (secp256r1) Signatur passt mathematisch exakt zum SHA-256 Hash und Public Key."
+                                "ECDSA (secp256r1) Signatur bestätigt Originalität und Unversehrtheit."
                             } else {
-                                result.errorReason ?: "Die Signatur stimmt nicht mit den Zertifikatsdaten überein."
+                                result.errorReason ?: "Daten oder Signatur wurden verändert."
                             },
-                            color = TextOffWhite,
-                            fontSize = 11.5.sp
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
@@ -429,51 +521,43 @@ private fun VerificationResultDetailCard(
 
             val p = result.payload
             if (p != null) {
-                VerifiedFieldRow("Protokoll-ID (UUID)", p.protocolId, mono = true)
-                VerifiedFieldRow("Zertifizierter Zeitstempel (UTC)", p.timestampUtc, mono = true)
-                VerifiedFieldRow("Aufnahmegerät (Hardware)", p.deviceModel)
-                VerifiedFieldRow("Hardware-Keystore-Level", p.securityLevel)
-                VerifiedFieldRow("Beweis-Modus", p.modeTitle)
-                VerifiedFieldRow("Zertifizierter OCR-/Barcode-Wert", p.primaryOcrValue, highlight = true)
-                VerifiedFieldRow(
-                    "3D-Parallaxe & Sensorkette",
-                    "${p.parallaxScore}% 3D-Score • ${if (p.isContinuous) "Lückenlose Aufzeichnung" else "Lücke gemeldet"}"
+                M3VerifiedItem("Zertifizierter OCR-/Barcode-Wert", p.primaryOcrValue, highlight = true)
+                M3VerifiedItem("Protokoll-ID (UUID)", p.protocolId, mono = true)
+                M3VerifiedItem("Zeitstempel (UTC)", p.timestampUtc, mono = true)
+                M3VerifiedItem("Aufnahmegerät", p.deviceModel)
+                M3VerifiedItem("Hardware-Sicherheitslevel", p.securityLevel)
+                M3VerifiedItem(
+                    "Sensorkette & 3D-Parallaxe",
+                    "${p.parallaxScore}% 3D-Score • ${if (p.isContinuous) "Lückenlos" else "Lücke gemeldet"}"
                 )
-                VerifiedFieldRow("SHA-256 Payload Hash", p.payloadHash, mono = true)
-                VerifiedFieldRow("Public Key Fingerprint", result.computedKeyFingerprint, mono = true)
-                VerifiedFieldRow("ECDSA Hardware-Signatur (Base64)", p.signatureBase64, mono = true)
+                M3VerifiedItem("SHA-256 Payload Hash", p.payloadHash, mono = true)
+                M3VerifiedItem("Public Key Fingerprint", result.computedKeyFingerprint, mono = true)
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (isValid && result.payload != null) {
                     OutlinedButton(
                         onClick = onSimulateTamper,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, AmberWarning)
+                        shape = RoundedCornerShape(50)
                     ) {
                         Icon(
                             imageVector = Icons.Default.BugReport,
                             contentDescription = null,
-                            tint = AmberWarning,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Manipulation testen", color = AmberWarning, fontSize = 11.5.sp)
+                        Text("Manipulation testen")
                     }
                 }
 
-                Button(
+                FilledTonalButton(
                     onClick = onResetScanner,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AnthraciteCard,
-                        contentColor = TextOffWhite
-                    )
+                    shape = RoundedCornerShape(50)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
@@ -481,7 +565,7 @@ private fun VerificationResultDetailCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Neuen QR-Code scannen", fontSize = 11.5.sp)
+                    Text("Neuer Scan")
                 }
             }
         }
@@ -489,28 +573,36 @@ private fun VerificationResultDetailCard(
 }
 
 @Composable
-private fun VerifiedFieldRow(
+private fun M3VerifiedItem(
     label: String,
     value: String,
     mono: Boolean = false,
     highlight: Boolean = false
 ) {
     Surface(
-        color = AnthraciteDeep,
-        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(
-                text = label.uppercase(),
-                color = TextSlateMuted,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = value,
-                color = if (highlight) CyanTelemetry else TextOffWhite,
-                fontSize = if (mono) 10.5.sp else 12.sp,
+                style = if (highlight) {
+                    MaterialTheme.typography.titleSmall
+                } else {
+                    MaterialTheme.typography.bodySmall
+                },
+                color = if (highlight) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
                 fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
                 fontWeight = if (highlight) FontWeight.Bold else FontWeight.Normal
             )

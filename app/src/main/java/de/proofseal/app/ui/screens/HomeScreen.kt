@@ -1,8 +1,18 @@
 package de.proofseal.app.ui.screens
 
-import androidx.compose.foundation.BorderStroke
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,68 +27,110 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.AddModerator
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.GppGood
+import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalCard
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import de.proofseal.app.data.ProofRecordEntity
 import de.proofseal.app.model.ProofMode
-import de.proofseal.app.ui.theme.AmberWarning
-import de.proofseal.app.ui.theme.AnthraciteBorder
-import de.proofseal.app.ui.theme.AnthraciteCard
-import de.proofseal.app.ui.theme.AnthraciteDeep
-import de.proofseal.app.ui.theme.AnthraciteSurface
-import de.proofseal.app.ui.theme.CyanTelemetry
-import de.proofseal.app.ui.theme.EmeraldBright
-import de.proofseal.app.ui.theme.EmeraldContainer
-import de.proofseal.app.ui.theme.EmeraldPrimary
-import de.proofseal.app.ui.theme.TextOffWhite
-import de.proofseal.app.ui.theme.TextSlateMuted
+import de.proofseal.app.ui.theme.AppThemeMode
 import de.proofseal.app.ui.viewmodel.HardwareKeystoreInfo
 import de.proofseal.app.ui.viewmodel.ProofSealViewModel
 import de.proofseal.app.util.ShareHelper
 import java.io.File
 
+private enum class MainNavTab(
+    val index: Int,
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
+) {
+    CREATE(0, "Erstellen", Icons.Filled.AddModerator, Icons.Outlined.Shield),
+    ARCHIVE(1, "Archiv", Icons.Filled.FolderSpecial, Icons.Outlined.Folder),
+    VERIFIER(2, "Prüfer", Icons.Filled.QrCodeScanner, Icons.Outlined.QrCodeScanner),
+    SYSTEM(3, "System & Info", Icons.Filled.Tune, Icons.Outlined.Settings)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: ProofSealViewModel,
@@ -86,524 +138,840 @@ fun HomeScreen(
     onOpenVerifier: () -> Unit,
     onOpenProtocolDetail: (String) -> Unit
 ) {
-    val context = LocalContext.current
     val hardwareInfo by viewModel.hardwareInfo.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val records by viewModel.records.collectAsState()
+    var selectedTabIndex by rememberSaveable { mutableIntStateOf(MainNavTab.CREATE.index) }
+    var isStrongBoxSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var isTopMenuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = AnthraciteDeep
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            // 1. Header & Hardware-Keystore Sicherheitsstatus
-            item {
-                HardwareSecurityHeaderCard(
-                    hardwareInfo = hardwareInfo,
-                    onOpenVerifier = onOpenVerifier
-                )
-            }
-
-            // 2. Sektion: Die 3 geführten Beweis-Modi
-            item {
-                Text(
-                    text = "NEUES BEWEIS-PROTOKOLL STARTEN",
-                    color = EmeraldBright,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.1.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                Text(
-                    text = "Lückenlose Sensorkette + 3D-Anti-Fake-Prüfung + On-Device OCR & Hardware-Signatur",
-                    color = TextSlateMuted,
-                    fontSize = 12.sp
-                )
-            }
-
-            item {
-                GuidedModeSelectionCard(
-                    mode = ProofMode.PACKAGE_SHIPPING,
-                    icon = Icons.Default.Inventory2,
-                    accentColor = EmeraldPrimary,
-                    badgeText = "3 PFLICHT-SCHRITTE • 4 KEYFRAMES",
-                    onClick = { onStartCaptureMode(ProofMode.PACKAGE_SHIPPING) }
-                )
-            }
-
-            item {
-                GuidedModeSelectionCard(
-                    mode = ProofMode.METER_HANDOVER,
-                    icon = Icons.Default.Speed,
-                    accentColor = CyanTelemetry,
-                    badgeText = "3D-PARALLAXE • LIVE-OCR PRÜFFELD",
-                    onClick = { onStartCaptureMode(ProofMode.METER_HANDOVER) }
-                )
-            }
-
-            item {
-                GuidedModeSelectionCard(
-                    mode = ProofMode.INCIDENT_FAST,
-                    icon = Icons.Default.ReportProblem,
-                    accentColor = AmberWarning,
-                    badgeText = "SCHNELL-PROTOKOLL • GPS & ZEUGENFELD",
-                    onClick = { onStartCaptureMode(ProofMode.INCIDENT_FAST) }
-                )
-            }
-
-            // 3. Lokales Beweis-Archiv & Suche (Room Database)
-            item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "VERSIEGELTE PROTOKOLLE (${records.size})",
-                        color = TextOffWhite,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp
-                    )
-                    Text(
-                        text = "Lokal & Offline gesichert",
-                        color = EmeraldBright,
-                        fontSize = 11.sp
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = viewModel::updateSearchQuery,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = {
-                        Text(
-                            "Suche nach Titel, Sendungsnr., OCR-Text, Datum…",
-                            color = TextSlateMuted,
-                            fontSize = 13.sp
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Suchen",
-                            tint = EmeraldBright
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.updateSearchQuery("") }) {
+        topBar = {
+            CenterAlignedTopAppBar(
+                navigationIcon = {
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(36.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Default.Clear,
-                                    contentDescription = "Suche löschen",
-                                    tint = TextSlateMuted
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = "ProofSeal",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EmeraldPrimary,
-                        unfocusedBorderColor = AnthraciteBorder,
-                        focusedContainerColor = AnthraciteSurface,
-                        unfocusedContainerColor = AnthraciteSurface,
-                        focusedTextColor = TextOffWhite,
-                        unfocusedTextColor = TextOffWhite
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                )
-            }
-
-            if (records.isEmpty()) {
-                item {
-                    EmptyArchiveCard(searchQuery = searchQuery)
-                }
-            } else {
-                items(records, key = { it.protocolId }) { record ->
-                    ProofRecordArchiveItemCard(
-                        record = record,
-                        onOpenDetail = { onOpenProtocolDetail(record.protocolId) },
-                        onSharePdf = {
-                            ShareHelper.sharePdfCertificate(
-                                context = context,
-                                pdfFile = File(record.pdfFilePath),
-                                protocolTitle = record.title,
-                                protocolId = record.protocolId,
-                                primaryValue = record.primaryOcrValue,
-                                sha256Hash = record.payloadSha256Hex
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "ProofSeal",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                },
+                title = {},
+                actions = {
+                    // 1. Kompakter, anklickbarer StrongBox-Status-Chip
+                    AssistChip(
+                        onClick = { isStrongBoxSheetOpen = true },
+                        label = {
+                            Text(
+                                text = if (hardwareInfo.isStrongBoxBacked) "StrongBox" else "StrongBox / TEE",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
                             )
                         },
-                        onDelete = { viewModel.deleteRecord(record) }
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.GppGood,
+                                contentDescription = "Krypto-Hardware",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        },
+                        shape = RoundedCornerShape(50),
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        border = null
+                    )
+
+                    // 2. Einstellungen-/Menü-Icon
+                    Box {
+                        IconButton(onClick = { isTopMenuExpanded = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Menü & Einstellungen"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = isTopMenuExpanded,
+                            onDismissRequest = { isTopMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Hardware-Keystore Details") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.VerifiedUser, contentDescription = null)
+                                },
+                                onClick = {
+                                    isTopMenuExpanded = false
+                                    isStrongBoxSheetOpen = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("QR-Siegel Prüfer öffnen") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+                                },
+                                onClick = {
+                                    isTopMenuExpanded = false
+                                    selectedTabIndex = MainNavTab.VERIFIER.index
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("System & Einstellungen") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Settings, contentDescription = null)
+                                },
+                                onClick = {
+                                    isTopMenuExpanded = false
+                                    selectedTabIndex = MainNavTab.SYSTEM.index
+                                }
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        bottomBar = {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                MainNavTab.entries.forEach { tab ->
+                    val isSelected = selectedTabIndex == tab.index
+                    NavigationBarItem(
+                        selected = isSelected,
+                        onClick = { selectedTabIndex = tab.index },
+                        icon = {
+                            Icon(
+                                imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                                contentDescription = tab.label
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = tab.label,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
                     )
                 }
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
+        AnimatedContent(
+            targetState = selectedTabIndex,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
+            },
+            label = "MainTabTransition",
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) { targetTab ->
+            when (targetTab) {
+                MainNavTab.CREATE.index -> {
+                    CreateTabContent(
+                        hardwareInfo = hardwareInfo,
+                        onStartCaptureMode = onStartCaptureMode,
+                        onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
+                    )
+                }
+
+                MainNavTab.ARCHIVE.index -> {
+                    ArchiveTabContent(
+                        viewModel = viewModel,
+                        onOpenProtocolDetail = onOpenProtocolDetail,
+                        onSwitchToCreateTab = { selectedTabIndex = MainNavTab.CREATE.index }
+                    )
+                }
+
+                MainNavTab.VERIFIER.index -> {
+                    SealVerifierTabContent(
+                        viewModel = viewModel
+                    )
+                }
+
+                MainNavTab.SYSTEM.index -> {
+                    SystemInfoTabContent(
+                        viewModel = viewModel,
+                        hardwareInfo = hardwareInfo,
+                        onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
+                    )
+                }
+            }
+        }
+
+        // ModalBottomSheet für detaillierte Krypto-Hardware-Daten (StrongBox / TEE)
+        if (isStrongBoxSheetOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { isStrongBoxSheetOpen = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+            ) {
+                StrongBoxCryptoDetailsBottomSheet(
+                    hardwareInfo = hardwareInfo,
+                    onDismiss = { isStrongBoxSheetOpen = false }
+                )
             }
         }
     }
 }
 
+// ============================================================================
+// TAB 1: "ERSTELLEN" (Willkommens-Header + 3 edle Material 3 Hero-Cards)
+// ============================================================================
 @Composable
-private fun HardwareSecurityHeaderCard(
+private fun CreateTabContent(
     hardwareInfo: HardwareKeystoreInfo,
-    onOpenVerifier: () -> Unit
+    onStartCaptureMode: (ProofMode) -> Unit,
+    onOpenHardwareSheet: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-        border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.45f))
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
+        // 1. Luftige Material 3 Willkommens-Header-Card
+        item {
+            FilledTonalCard(
+                onClick = onOpenHardwareSheet,
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.filledTonalCardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                )
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
-                            .background(EmeraldContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.GppGood,
-                            contentDescription = null,
-                            tint = EmeraldBright,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "PROOFSEAL",
-                            color = TextOffWhite,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.2.sp
-                        )
-                        Text(
-                            text = "Digitaler Zeuge & Hardware-Beweisgenerator",
-                            color = TextSlateMuted,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                Surface(
-                    color = EmeraldContainer,
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, EmeraldPrimary)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        modifier = Modifier.size(54.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.primary
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.VerifiedUser,
-                            contentDescription = null,
-                            tint = EmeraldBright,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.VerifiedUser,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (hardwareInfo.isStrongBoxBacked) "STRONGBOX SE" else "TEE KEYSTORE",
-                            color = EmeraldBright,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            text = "Bereit für neue Beweissicherung",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Hardware-Siegel aktiv (${hardwareInfo.securityLevelLabel}) • Lückenlose 3D-Sensorkette & On-Device OCR bereit.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Surface(
-                color = AnthraciteDeep,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text(
-                        text = "KRYPTO-MODUL: ${hardwareInfo.securityLevelLabel} (ECDSA secp256r1 / SHA-256)",
-                        color = EmeraldBright,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Key Fingerprint: ${hardwareInfo.publicKeyFingerprint}",
-                        color = TextSlateMuted,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = onOpenVerifier,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AnthraciteCard,
-                    contentColor = EmeraldBright
-                ),
-                border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.6f))
-            ) {
-                Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+        item {
+            Column(modifier = Modifier.padding(horizontal = 4.dp)) {
                 Text(
-                    text = "EINGEBAUTER ECHTHEITS-PRÜFER (QR-SIEGEL SCANNEN)",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "Geführte Beweis-Modi",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Wähle ein Szenario für dein signiertes 2-Seiten-Beweis-PDF",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+
+        // 2. Hero-Card 1: Paket-Versand & Verkauf
+        item {
+            GuidedModeMaterial3HeroCard(
+                mode = ProofMode.PACKAGE_SHIPPING,
+                squircleIcon = Icons.Default.Inventory2,
+                squircleContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                squircleIconTint = MaterialTheme.colorScheme.primary,
+                chipLabel = "4 Keyframes",
+                featureBadges = listOf(
+                    Icons.Default.Sensors to "Sensorkette",
+                    Icons.Default.DocumentScanner to "Barcode & OCR",
+                    Icons.Default.PictureAsPdf to "Signiertes PDF"
+                ),
+                onClick = { onStartCaptureMode(ProofMode.PACKAGE_SHIPPING) }
+            )
+        }
+
+        // 3. Hero-Card 2: Zählerstand, Kfz & Übergabe
+        item {
+            GuidedModeMaterial3HeroCard(
+                mode = ProofMode.METER_HANDOVER,
+                squircleIcon = Icons.Default.Speed,
+                squircleContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                squircleIconTint = MaterialTheme.colorScheme.secondary,
+                chipLabel = "3D-Parallaxe",
+                featureBadges = listOf(
+                    Icons.Default.Sensors to "Anti-Spoofing",
+                    Icons.Default.DocumentScanner to "Live-OCR",
+                    Icons.Default.PictureAsPdf to "Übergabe-Siegel"
+                ),
+                onClick = { onStartCaptureMode(ProofMode.METER_HANDOVER) }
+            )
+        }
+
+        // 4. Hero-Card 3: Vorfall & Zustands-Beweis
+        item {
+            GuidedModeMaterial3HeroCard(
+                mode = ProofMode.INCIDENT_FAST,
+                squircleIcon = Icons.Default.ReportProblem,
+                squircleContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                squircleIconTint = MaterialTheme.colorScheme.tertiary,
+                chipLabel = "Schnell-Siegel",
+                featureBadges = listOf(
+                    Icons.Default.GpsFixed to "GPS-Ortsbeweis",
+                    Icons.Default.VerifiedUser to "Zeugenfeld",
+                    Icons.Default.PictureAsPdf to "Sofort-PDF"
+                ),
+                onClick = { onStartCaptureMode(ProofMode.INCIDENT_FAST) }
+            )
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun GuidedModeSelectionCard(
+private fun GuidedModeMaterial3HeroCard(
     mode: ProofMode,
-    icon: ImageVector,
-    accentColor: Color,
-    badgeText: String,
+    squircleIcon: ImageVector,
+    squircleContainerColor: Color,
+    squircleIconTint: Color,
+    chipLabel: String,
+    featureBadges: List<Pair<ImageVector, String>>,
     onClick: () -> Unit
 ) {
-    Card(
+    ElevatedCard(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AnthraciteCard),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f))
+            .animateContentSize(),
+        shape = RoundedCornerShape(24.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
     ) {
-        Column(modifier = Modifier.padding(15.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+        ) {
+            // Obere Zeile: 52.dp Squircle-Icon links + SuggestionChip rechts
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
                 Surface(
-                    color = accentColor.copy(alpha = 0.16f),
-                    shape = RoundedCornerShape(6.dp)
+                    modifier = Modifier.size(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = squircleContainerColor
                 ) {
-                    Text(
-                        text = badgeText,
-                        color = accentColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = squircleIcon,
+                            contentDescription = mode.title,
+                            tint = squircleIconTint,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
-                Text(
-                    text = "Sensorkette + PDF ->",
-                    color = accentColor,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold
+
+                SuggestionChip(
+                    onClick = onClick,
+                    label = {
+                        Text(
+                            text = chipLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    shape = RoundedCornerShape(50),
+                    colors = SuggestionChipDefaults.suggestionChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    border = null
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accentColor.copy(alpha = 0.18f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = accentColor,
-                        modifier = Modifier.size(25.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
+            // Mittlere Zeile: Großer Titel + 2-zeilige Beschreibung + runder Tonal-Chevron-Container rechts
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = mode.title,
-                        color = TextOffWhite,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = mode.description,
-                        color = TextSlateMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Surface(
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Modus starten",
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Untere Zeile: Dezente Feature-Badges mit Mini-Icons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                featureBadges.forEach { (badgeIcon, badgeText) ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = badgeIcon,
+                                contentDescription = null,
+                                tint = squircleIconTint,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = badgeText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+// ============================================================================
+// TAB 2: "ARCHIV" (Pill-Search, Filter-Chips, Protokoll-Karten & Empty-State)
+// ============================================================================
 @Composable
-private fun ProofRecordArchiveItemCard(
+private fun ArchiveTabContent(
+    viewModel: ProofSealViewModel,
+    onOpenProtocolDetail: (String) -> Unit,
+    onSwitchToCreateTab: () -> Unit
+) {
+    val context = LocalContext.current
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val selectedFilter by viewModel.selectedModeFilter.collectAsState()
+    val records by viewModel.records.collectAsState()
+
+    val filterOptions = listOf(
+        null to "Alle",
+        ProofMode.PACKAGE_SHIPPING.id to "Paket",
+        ProofMode.METER_HANDOVER.id to "Zähler/Kfz",
+        ProofMode.INCIDENT_FAST.id to "Vorfall"
+    )
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // 1. Pill-Shape Suchleiste (RoundedCornerShape(50))
+        item {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = viewModel::updateSearchQuery,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(50),
+                placeholder = {
+                    Text("Protokolle, Sendungsnr., OCR-Werte durchsuchen…")
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Suchen",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.updateSearchQuery("") }) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Suche löschen"
+                            )
+                        }
+                    }
+                }
+            )
+        }
+
+        // 2. Filter-Chips ("Alle", "Paket", "Zähler/Kfz", "Vorfall")
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                filterOptions.forEach { (modeId, label) ->
+                    val selected = selectedFilter == modeId
+                    FilterChip(
+                        selected = selected,
+                        onClick = { viewModel.updateModeFilter(modeId) },
+                        label = { Text(label) },
+                        leadingIcon = if (selected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        } else null,
+                        shape = RoundedCornerShape(50)
+                    )
+                }
+            }
+        }
+
+        // 3. Protokoll-Liste oder edler Empty-State
+        if (records.isEmpty()) {
+            item {
+                ElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(64.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = if (searchQuery.isBlank() && selectedFilter == null) {
+                                "Noch keine Protokolle im Archiv"
+                            } else {
+                                "Keine passenden Beweis-Protokolle gefunden"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Erstelle ein neues Beweis-Protokoll mit lückenloser Sensorkette und Hardware-Keystore-Signatur.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        FilledTonalButton(
+                            onClick = onSwitchToCreateTab,
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AddModerator,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Jetzt erstes Protokoll erstellen")
+                        }
+                    }
+                }
+            }
+        } else {
+            items(records, key = { it.protocolId }) { record ->
+                ArchiveProtocolMaterial3Card(
+                    record = record,
+                    onOpenDetail = { onOpenProtocolDetail(record.protocolId) },
+                    onSharePdf = {
+                        ShareHelper.sharePdfCertificate(
+                            context = context,
+                            pdfFile = File(record.pdfFilePath),
+                            protocolTitle = record.title,
+                            protocolId = record.protocolId,
+                            primaryValue = record.primaryOcrValue,
+                            sha256Hash = record.payloadSha256Hex
+                        )
+                    },
+                    onDelete = { viewModel.deleteRecord(record) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchiveProtocolMaterial3Card(
     record: ProofRecordEntity,
     onOpenDetail: () -> Unit,
     onSharePdf: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
+    val previewBitmap = remember(record.previewImagePath) {
+        try {
+            val file = File(record.previewImagePath)
+            if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    ElevatedCard(
+        onClick = onOpenDetail,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpenDetail),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-        border = BorderStroke(1.dp, AnthraciteBorder)
+            .animateContentSize(),
+        shape = RoundedCornerShape(24.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(18.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = EmeraldBright,
-                        modifier = Modifier.size(16.dp)
+                // Vorschaubild oder Squircle-Fallback
+                if (previewBitmap != null) {
+                    Image(
+                        bitmap = previewBitmap.asImageBitmap(),
+                        contentDescription = record.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(16.dp))
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                } else {
+                    Surface(
+                        modifier = Modifier.size(64.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = record.modeTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = record.modeTitle.uppercase(),
-                        color = EmeraldBright,
-                        fontSize = 11.sp,
+                        text = record.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = record.createdAtFormatted,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    modifier = Modifier.size(36.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Details öffnen",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // OCR-Wert & Status-Pills
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "OCR / Code: ${record.primaryOcrValue}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "3D: ${record.parallaxConfidenceScore}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
                     )
                 }
-                Text(
-                    text = record.createdAtFormatted,
-                    color = TextSlateMuted,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = record.title,
-                color = TextOffWhite,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Erkannter Wert (OCR/Code): ${record.primaryOcrValue}",
-                color = CyanTelemetry,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
+            // Direkt-Buttons für "PDF öffnen" und "PDF teilen"
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                BadgeChip(
-                    text = "3D-Score: ${record.parallaxConfidenceScore}%",
-                    color = if (record.parallaxConfidenceScore >= 35) EmeraldBright else AmberWarning
-                )
-                BadgeChip(
-                    text = if (record.isSensorChainContinuous) "Sensorkette lückenlos" else "Gap ${record.maxSensorGapMillis}ms",
-                    color = if (record.isSensorChainContinuous) EmeraldBright else AmberWarning
-                )
-                BadgeChip(
-                    text = record.hardwareSecurityLevel,
-                    color = TextSlateMuted
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "SHA-256: ${record.payloadSha256Hex.take(20)}…${record.payloadSha256Hex.takeLast(12)}",
-                color = TextSlateMuted,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = onOpenDetail,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, AnthraciteBorder),
-                    contentPadding = PaddingValues(vertical = 8.dp)
+                    shape = RoundedCornerShape(50)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Description,
                         contentDescription = null,
-                        tint = TextOffWhite,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("PDF & Zertifikat", color = TextOffWhite, fontSize = 12.sp)
+                    Text("PDF öffnen")
                 }
 
                 Button(
                     onClick = onSharePdf,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = EmeraldPrimary,
-                        contentColor = Color(0xFF022C22)
-                    ),
-                    contentPadding = PaddingValues(vertical = 8.dp)
+                    shape = RoundedCornerShape(50)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        "WhatsApp / Teilen",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("PDF teilen", fontWeight = FontWeight.Bold)
                 }
 
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.size(36.dp)
-                ) {
+                IconButton(onClick = onDelete) {
                     Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Löschen",
-                        tint = TextSlateMuted
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Protokoll löschen",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -611,60 +979,400 @@ private fun ProofRecordArchiveItemCard(
     }
 }
 
+// ============================================================================
+// TAB 4: "SYSTEM & INFO" (Dynamic Color, Theme-Modus, Standard-Zeuge, Krypto-Info)
+// ============================================================================
 @Composable
-private fun BadgeChip(text: String, color: Color) {
-    Surface(
-        color = AnthraciteDeep,
-        shape = RoundedCornerShape(6.dp),
-        border = BorderStroke(0.8.dp, color.copy(alpha = 0.4f))
+private fun SystemInfoTabContent(
+    viewModel: ProofSealViewModel,
+    hardwareInfo: HardwareKeystoreInfo,
+    onOpenHardwareSheet: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val uiPrefs by viewModel.uiPreferences.collectAsState()
+    val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 1. Erscheinungsbild & Material You Dynamic Color
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "Design & Material You (Material 3)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Dynamic Color (Systemfarben)",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (supportsDynamic) {
+                                "Passt das Farbschema automatisch an dein Android-12+-Hintergrundbild an"
+                            } else {
+                                "Erfordert Android 12+ (nutzt ProofSeal Slate & Mint Palette)"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = uiPrefs.useDynamicColor,
+                        onCheckedChange = { viewModel.setUseDynamicColor(it) },
+                        enabled = supportsDynamic
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                Text(
+                    text = "Farbmodus (Dark / Light Mode)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val modes = listOf(
+                        AppThemeMode.DARK to "Dunkel (Slate)",
+                        AppThemeMode.LIGHT to "Hell",
+                        AppThemeMode.SYSTEM to "System"
+                    )
+                    modes.forEach { (mode, label) ->
+                        val selected = uiPrefs.themeMode == mode
+                        FilterChip(
+                            selected = selected,
+                            onClick = { viewModel.setThemeMode(mode) },
+                            label = { Text(label) },
+                            leadingIcon = if (selected) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else null,
+                            shape = RoundedCornerShape(50)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Protokoll-Voreinstellungen (Standard-Zeugenname)
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Standard-Voreinstellungen für PDFs",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Optionaler Standard-Zeugenname, der bei neuen Beweis-Protokollen automatisch vorbefüllt wird.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = uiPrefs.defaultWitnessName,
+                    onValueChange = viewModel::setDefaultWitnessName,
+                    label = { Text("Standard-Zeugenname (Optional)") },
+                    placeholder = { Text("z. B. Max Mustermann / Versandabteilung") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // 3. Detaillierter Hardware-Keystore-Status
+        ElevatedCard(
+            onClick = onOpenHardwareSheet,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.GppGood,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Krypto-Hardware & Schlüssel-Status",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Sicherheitslevel: ${hardwareInfo.securityLevelLabel}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Algorithmus: ECDSA (Kurve secp256r1) • Digest: SHA-256",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Fingerprint: ${hardwareInfo.publicKeyFingerprint}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                FilledTonalButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(hardwareInfo.publicKeyFingerprint))
+                        Toast.makeText(
+                            context,
+                            "Public Key Fingerprint in Zwischenablage kopiert",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Public Key Fingerprint kopieren")
+                }
+            }
+        }
+
+        // 4. Rechtlicher Hinweis zum technischen Anscheinsbeweis
+        FilledTonalCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.filledTonalCardColors(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Rechtlicher Hinweis & Technischer Anscheinsbeweis",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    text = "Technischer Anscheinsbeweis gemäß kryptografischer Hardware-Signatur. Alle Aufnahmen werden mit monotoner Hardware-Uptime, 3D-Sensorkette und SHA256withECDSA-Signatur im Android Hardware-Keystore versiegelt. Jede nachträgliche Veränderung der Daten bricht die mathematische Signatur.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MODAL BOTTOM SHEET FÜR STRONGBOX / HARDWARE-KEYSTORE DETAILS
+// ============================================================================
+@Composable
+private fun StrongBoxCryptoDetailsBottomSheet(
+    hardwareInfo: HardwareKeystoreInfo,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                modifier = Modifier.size(48.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.GppGood,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = "Hardware-Keystore Sicherheitszertifikat",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = hardwareInfo.securityLevelLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                CryptoSheetRow("Algorithmus & Kurve", "ECDSA (secp256r1 / NIST P-256)")
+                CryptoSheetRow("Signatur-Verfahren", "SHA256withECDSA (AndroidKeyStore)")
+                CryptoSheetRow(
+                    "Hardware-Backing",
+                    if (hardwareInfo.isStrongBoxBacked) {
+                        "Echtes StrongBox Hardware-SE (Dedizierter Sicherheitschip)"
+                    } else {
+                        "Standard TEE (Trusted Execution Environment mit Auto-Fallback)"
+                    }
+                )
+                CryptoSheetRow(
+                    "Public Key Fingerprint (SHA-256)",
+                    hardwareInfo.publicKeyFingerprint,
+                    isMono = true
+                )
+            }
+        }
+
         Text(
-            text = text,
-            color = color,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            text = "Der private ECDSA-Signaturschlüssel verlässt niemals den geschützten Hardware-Sicherheitsbereich deines Smartphones. Selbst bei Root-Zugriff kann der Schlüssel nicht extrahiert oder zum Nachsignieren manipulierter PDFs missbraucht werden.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            FilledTonalButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(hardwareInfo.publicKeyFingerprint))
+                    Toast.makeText(
+                        context,
+                        "Fingerprint kopiert!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(50)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Fingerprint kopieren")
+            }
+
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.weight(0.8f),
+                shape = RoundedCornerShape(50)
+            ) {
+                Text("Schließen")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
     }
 }
 
 @Composable
-private fun EmptyArchiveCard(searchQuery: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AnthraciteSurface),
-        border = BorderStroke(1.dp, AnthraciteBorder)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                tint = TextSlateMuted,
-                modifier = Modifier.size(36.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (searchQuery.isBlank()) {
-                    "Noch keine versiegelten Beweis-Protokolle vorhanden"
-                } else {
-                    "Keine Protokolle für \"$searchQuery\" gefunden"
-                },
-                color = TextOffWhite,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Wähle oben einen der 3 geführten Beweis-Modi, um eine lückenlose Sensorkette aufzuzeichnen und ein Hardware-signiertes PDF zu generieren.",
-                color = TextSlateMuted,
-                fontSize = 12.sp
-            )
-        }
+private fun CryptoSheetRow(
+    label: String,
+    value: String,
+    isMono: Boolean = false
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = if (isMono) FontFamily.Monospace else FontFamily.Default
+        )
     }
 }

@@ -4,8 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -13,12 +16,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import de.proofseal.app.model.ProofMode
 import de.proofseal.app.ui.screens.GuidedCaptureScreen
 import de.proofseal.app.ui.screens.HomeScreen
 import de.proofseal.app.ui.screens.ProtocolDetailScreen
 import de.proofseal.app.ui.screens.SealVerifierScreen
-import de.proofseal.app.ui.theme.AnthraciteDeep
 import de.proofseal.app.ui.theme.ProofSealTheme
 import de.proofseal.app.ui.viewmodel.ProofSealViewModel
 
@@ -26,12 +27,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            ProofSealTheme {
+            val proofViewModel: ProofSealViewModel = viewModel()
+            val uiPreferences by proofViewModel.uiPreferences.collectAsState()
+
+            ProofSealTheme(
+                themeMode = uiPreferences.themeMode,
+                useDynamicColor = uiPreferences.useDynamicColor
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = AnthraciteDeep
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    ProofSealAppNavigation()
+                    ProofSealAppNavigation(proofViewModel = proofViewModel)
                 }
             }
         }
@@ -40,7 +47,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ProofSealAppNavigation(
-    proofViewModel: ProofSealViewModel = viewModel()
+    proofViewModel: ProofSealViewModel
 ) {
     val navController = rememberNavController()
 
