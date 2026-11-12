@@ -3,6 +3,7 @@ package de.proofseal.app.ui.screens
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -10,8 +11,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,7 +44,7 @@ import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.GppGood
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Inventory2
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.ReportProblem
@@ -66,8 +65,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -77,8 +75,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
@@ -87,6 +87,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -94,6 +95,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -116,18 +118,19 @@ import de.proofseal.app.ui.theme.AppThemeMode
 import de.proofseal.app.ui.viewmodel.HardwareKeystoreInfo
 import de.proofseal.app.ui.viewmodel.ProofSealViewModel
 import de.proofseal.app.util.ShareHelper
+import kotlinx.coroutines.launch
 import java.io.File
 
 private enum class MainNavTab(
     val index: Int,
-    val label: String,
+    val drawerTitle: String,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector
 ) {
-    CREATE(0, "Erstellen", Icons.Filled.AddModerator, Icons.Outlined.Shield),
-    ARCHIVE(1, "Archiv", Icons.Filled.FolderSpecial, Icons.Outlined.Folder),
-    VERIFIER(2, "Prüfer", Icons.Filled.QrCodeScanner, Icons.Outlined.QrCodeScanner),
-    SYSTEM(3, "System & Info", Icons.Filled.Tune, Icons.Outlined.Settings)
+    CREATE(0, "Neues Beweis-Protokoll", Icons.Filled.Shield, Icons.Outlined.Shield),
+    ARCHIVE(1, "Versiegelte Protokolle (Archiv)", Icons.Filled.FolderSpecial, Icons.Outlined.Folder),
+    VERIFIER(2, "Echtheits-Prüfer (QR-Scanner)", Icons.Filled.QrCodeScanner, Icons.Outlined.QrCodeScanner),
+    SYSTEM(3, "System, Design & Info", Icons.Filled.Tune, Icons.Outlined.Settings)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -139,201 +142,297 @@ fun HomeScreen(
     onOpenProtocolDetail: (String) -> Unit
 ) {
     val hardwareInfo by viewModel.hardwareInfo.collectAsState()
+    val allRecords by viewModel.records.collectAsState()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(MainNavTab.CREATE.index) }
     var isStrongBoxSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var isTopMenuExpanded by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                navigationIcon = {
-                    Row(
-                        modifier = Modifier.padding(start = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+    // Zurück-Geste schließt zuerst den offenen Drawer oder springt von Unter-Bereichen zurück auf "Neues Beweis-Protokoll"
+    BackHandler(enabled = drawerState.isOpen || selectedTabIndex != MainNavTab.CREATE.index) {
+        if (drawerState.isOpen) {
+            coroutineScope.launch { drawerState.close() }
+        } else {
+            selectedTabIndex = MainNavTab.CREATE.index
+        }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
+            ) {
+                // 1. Edler Drawer-Header oben
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
-                            modifier = Modifier.size(36.dp),
-                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.size(48.dp),
+                            shape = RoundedCornerShape(16.dp),
                             color = MaterialTheme.colorScheme.primaryContainer
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.Shield,
-                                    contentDescription = "ProofSeal",
+                                    contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(26.dp)
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "ProofSeal",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                },
-                title = {},
-                actions = {
-                    // 1. Kompakter, anklickbarer StrongBox-Status-Chip
-                    AssistChip(
-                        onClick = { isStrongBoxSheetOpen = true },
-                        label = {
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
                             Text(
-                                text = if (hardwareInfo.isStrongBoxBacked) "StrongBox" else "StrongBox / TEE",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                                text = "ProofSeal",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.GppGood,
-                                contentDescription = "Krypto-Hardware",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(17.dp)
+                            Text(
+                                text = "Digitaler Zeuge & Hardware-Beweis",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+
+                    Surface(
+                        onClick = {
+                            coroutineScope.launch { drawerState.close() }
+                            isStrongBoxSheetOpen = true
                         },
                         shape = RoundedCornerShape(50),
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        border = null
-                    )
-
-                    // 2. Einstellungen-/Menü-Icon
-                    Box {
-                        IconButton(onClick = { isTopMenuExpanded = true }) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Menü & Einstellungen"
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = isTopMenuExpanded,
-                            onDismissRequest = { isTopMenuExpanded = false }
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Hardware-Keystore Details") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.VerifiedUser, contentDescription = null)
-                                },
-                                onClick = {
-                                    isTopMenuExpanded = false
-                                    isStrongBoxSheetOpen = true
-                                }
+                            Icon(
+                                imageVector = Icons.Default.GppGood,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
                             )
-                            DropdownMenuItem(
-                                text = { Text("QR-Siegel Prüfer öffnen") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (hardwareInfo.isStrongBoxBacked) {
+                                    "StrongBox SE aktiv"
+                                } else {
+                                    "StrongBox / TEE aktiv"
                                 },
-                                onClick = {
-                                    isTopMenuExpanded = false
-                                    selectedTabIndex = MainNavTab.VERIFIER.index
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("System & Einstellungen") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Settings, contentDescription = null)
-                                },
-                                onClick = {
-                                    isTopMenuExpanded = false
-                                    selectedTabIndex = MainNavTab.SYSTEM.index
-                                }
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                     }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
                 )
-            )
-        },
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceContainer
-            ) {
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 2. Die 4 Hauptbereiche als NavigationDrawerItem mit Pill-Markierung
                 MainNavTab.entries.forEach { tab ->
                     val isSelected = selectedTabIndex == tab.index
-                    NavigationBarItem(
+                    NavigationDrawerItem(
+                        label = {
+                            Text(
+                                text = tab.drawerTitle,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        },
                         selected = isSelected,
-                        onClick = { selectedTabIndex = tab.index },
+                        onClick = {
+                            selectedTabIndex = tab.index
+                            coroutineScope.launch { drawerState.close() }
+                        },
                         icon = {
                             Icon(
                                 imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                                contentDescription = tab.label
+                                contentDescription = tab.drawerTitle
                             )
                         },
-                        label = {
-                            Text(
-                                text = tab.label,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
+                        badge = if (tab == MainNavTab.ARCHIVE) {
+                            {
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHighest
+                                    }
+                                ) {
+                                    Text(
+                                        text = allRecords.size.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        } else null,
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                     )
-                }
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.background
-    ) { innerPadding ->
-        AnimatedContent(
-            targetState = selectedTabIndex,
-            transitionSpec = {
-                fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
-            },
-            label = "MainTabTransition",
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) { targetTab ->
-            when (targetTab) {
-                MainNavTab.CREATE.index -> {
-                    CreateTabContent(
-                        hardwareInfo = hardwareInfo,
-                        onStartCaptureMode = onStartCaptureMode,
-                        onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
-                    )
-                }
-
-                MainNavTab.ARCHIVE.index -> {
-                    ArchiveTabContent(
-                        viewModel = viewModel,
-                        onOpenProtocolDetail = onOpenProtocolDetail,
-                        onSwitchToCreateTab = { selectedTabIndex = MainNavTab.CREATE.index }
-                    )
-                }
-
-                MainNavTab.VERIFIER.index -> {
-                    SealVerifierTabContent(
-                        viewModel = viewModel
-                    )
-                }
-
-                MainNavTab.SYSTEM.index -> {
-                    SystemInfoTabContent(
-                        viewModel = viewModel,
-                        hardwareInfo = hardwareInfo,
-                        onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
-                    )
+                    Spacer(modifier = Modifier.height(4.dp))
                 }
             }
         }
-
-        // ModalBottomSheet für detaillierte Krypto-Hardware-Daten (StrongBox / TEE)
-        if (isStrongBoxSheetOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { isStrongBoxSheetOpen = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-            ) {
-                StrongBoxCryptoDetailsBottomSheet(
-                    hardwareInfo = hardwareInfo,
-                    onDismiss = { isStrongBoxSheetOpen = false }
+    ) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = "Navigationsmenü öffnen",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Surface(
+                                modifier = Modifier.size(34.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Shield,
+                                        contentDescription = "ProofSeal",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(9.dp))
+                            Text(
+                                text = "ProofSeal",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    title = {},
+                    actions = {
+                        // Rechts oben NUR der grüne, anklickbare StrongBox-Status-Chip
+                        AssistChip(
+                            onClick = { isStrongBoxSheetOpen = true },
+                            label = {
+                                Text(
+                                    text = "StrongBox",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.GppGood,
+                                    contentDescription = "Krypto-Hardware",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            },
+                            shape = RoundedCornerShape(50),
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            border = null,
+                            modifier = Modifier.padding(end = 12.dp)
+                        )
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
+            },
+            containerColor = MaterialTheme.colorScheme.background
+        ) { innerPadding ->
+            AnimatedContent(
+                targetState = selectedTabIndex,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
+                },
+                label = "MainDrawerScreenTransition",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) { targetTab ->
+                when (targetTab) {
+                    MainNavTab.CREATE.index -> {
+                        CreateTabContent(
+                            hardwareInfo = hardwareInfo,
+                            onStartCaptureMode = onStartCaptureMode,
+                            onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
+                        )
+                    }
+
+                    MainNavTab.ARCHIVE.index -> {
+                        ArchiveTabContent(
+                            viewModel = viewModel,
+                            onOpenProtocolDetail = onOpenProtocolDetail,
+                            onSwitchToCreateTab = { selectedTabIndex = MainNavTab.CREATE.index }
+                        )
+                    }
+
+                    MainNavTab.VERIFIER.index -> {
+                        SealVerifierTabContent(
+                            viewModel = viewModel
+                        )
+                    }
+
+                    MainNavTab.SYSTEM.index -> {
+                        SystemInfoTabContent(
+                            viewModel = viewModel,
+                            hardwareInfo = hardwareInfo,
+                            onOpenHardwareSheet = { isStrongBoxSheetOpen = true }
+                        )
+                    }
+                }
+            }
+
+            // ModalBottomSheet für detaillierte Krypto-Hardware-Daten (StrongBox / TEE)
+            if (isStrongBoxSheetOpen) {
+                ModalBottomSheet(
+                    onDismissRequest = { isStrongBoxSheetOpen = false },
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+                ) {
+                    StrongBoxCryptoDetailsBottomSheet(
+                        hardwareInfo = hardwareInfo,
+                        onDismiss = { isStrongBoxSheetOpen = false }
+                    )
+                }
             }
         }
     }

@@ -12,20 +12,32 @@ android {
         applicationId = "de.proofseal.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = 100 + runNumber
+        versionName = "1.1.$runNumber"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("proofseal-persistent.jks")
+            storePassword = "proofseal123"
+            keyAlias = "proofseal_key"
+            keyPassword = "proofseal123"
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
