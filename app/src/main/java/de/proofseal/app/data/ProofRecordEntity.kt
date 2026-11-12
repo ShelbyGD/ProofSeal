@@ -71,14 +71,18 @@ data class ProofRecordEntity(
     }
 
     fun toQrSealPayload(): QrSealPayload {
+        val kfHashes = parseKeyframes().map { it.labeledShortHash }
         return QrSealPayload(
-            version = 1,
+            version = 2,
             protocolId = protocolId,
             timestampUtc = createdAtUtcIso,
+            uptimeNanos = endElapsedNanos,
             deviceModel = deviceModel,
             securityLevel = hardwareSecurityLevel,
             modeTitle = modeTitle,
             primaryOcrValue = primaryOcrValue.ifBlank { "-" },
+            imageHashes = kfHashes,
+            keyFingerprint = publicKeyFingerprint,
             parallaxScore = parallaxConfidenceScore,
             isContinuous = isSensorChainContinuous,
             payloadHash = payloadSha256Hex,

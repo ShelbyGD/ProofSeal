@@ -186,12 +186,20 @@ data class CapturedKeyframe(
     val formattedOffsetSeconds: String
         get() = String.format(Locale.US, "+%.2fs", offsetMillis / 1000.0)
 
+    /**
+     * Erster 16-Zeichen Hex-Kurzwert (Uppercase) des individuellen Bild-SHA-256
+     */
+    val shortHash16: String
+        get() = imageSha256.take(16).uppercase(Locale.ROOT)
+
+    /**
+     * Kanonischer Bild-Hash-Eintrag für QR-Code & Signatur (z. B. "IMG1: 4F8A901C2B3E4D5F")
+     */
+    val labeledShortHash: String
+        get() = "IMG$index: $shortHash16"
+
     val shortSha256: String
-        get() = if (imageSha256.length >= 16) {
-            "${imageSha256.take(8)}…${imageSha256.takeLast(8)}"
-        } else {
-            imageSha256
-        }
+        get() = shortHash16
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("index", index)
@@ -301,13 +309,16 @@ data class SensorIntegrityReport(
 )
 
 data class QrSealPayload(
-    val version: Int = 1,
+    val version: Int = 2,
     val protocolId: String,
     val timestampUtc: String,
+    val uptimeNanos: Long = 0L,
     val deviceModel: String,
     val securityLevel: String,
     val modeTitle: String,
     val primaryOcrValue: String,
+    val imageHashes: List<String> = emptyList(),
+    val keyFingerprint: String = "",
     val parallaxScore: Int,
     val isContinuous: Boolean,
     val payloadHash: String,
@@ -320,10 +331,13 @@ data class QrSealPayload(
             put("v", version)
             put("id", protocolId)
             put("ts", timestampUtc)
+            put("up", uptimeNanos)
             put("dev", deviceModel)
             put("sec", securityLevel)
             put("mode", modeTitle)
             put("ocr", primaryOcrValue)
+            put("imgs", JSONArray(imageHashes))
+            put("fp", keyFingerprint)
             put("par", parallaxScore)
             put("cont", isContinuous)
             put("hash", payloadHash)
@@ -339,14 +353,22 @@ data class QrSealPayload(
                 if (!obj.has("hash") || !obj.has("sig") || !obj.has("pub")) {
                     return null
                 }
+                val imgsArr = obj.optJSONArray("imgs") ?: JSONArray()
+                val imgList = ArrayList<String>(imgsArr.length())
+                for (i in 0 until imgsArr.length()) {
+                    imgList.add(imgsArr.optString(i))
+                }
                 QrSealPayload(
                     version = obj.optInt("v", 1),
                     protocolId = obj.optString("id", "UNBEKANNT"),
                     timestampUtc = obj.optString("ts", ""),
+                    uptimeNanos = obj.optLong("up", 0L),
                     deviceModel = obj.optString("dev", "Unbekanntes Gerät"),
                     securityLevel = obj.optString("sec", "Android Keystore"),
                     modeTitle = obj.optString("mode", "Beweis-Protokoll"),
                     primaryOcrValue = obj.optString("ocr", "-"),
+                    imageHashes = imgList,
+                    keyFingerprint = obj.optString("fp", ""),
                     parallaxScore = obj.optInt("par", 0),
                     isContinuous = obj.optBoolean("cont", true),
                     payloadHash = obj.getString("hash"),

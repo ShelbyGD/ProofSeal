@@ -226,7 +226,11 @@ fun ProtocolDetailScreen(
 
                         FilledTonalButton(
                             onClick = {
-                                viewModel.verifyScannedQrContent(record.toQrSealPayload().toCompactJson())
+                                if (pdfFile.exists()) {
+                                    viewModel.verifyLocalPdfFile(pdfFile, simulateBinaryTamper = false)
+                                } else {
+                                    viewModel.verifyScannedQrContent(record.toQrSealPayload().toCompactJson())
+                                }
                                 onOpenVerifierWithProtocol()
                             },
                             modifier = Modifier.weight(1f),
@@ -323,8 +327,10 @@ fun ProtocolDetailScreen(
                         )
                     }
 
+                    val imageShortHashes = record.parseKeyframes().joinToString(" • ") { it.labeledShortHash }
                     DetailMonoItem("Protokoll-ID (UUID)", record.protocolId)
                     DetailMonoItem("Erkannter Hauptwert (OCR / Barcode)", record.primaryOcrValue)
+                    DetailMonoItem("Verankerte Foto-Hashes (SHA-256)", imageShortHashes.ifBlank { "-" })
                     DetailMonoItem("Monotone Hardware-Uptime", record.uptimeSpanFormatted)
                     DetailMonoItem(
                         "Sensorkette & 3D-Parallaxe",

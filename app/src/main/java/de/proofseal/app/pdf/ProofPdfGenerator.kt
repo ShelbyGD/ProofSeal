@@ -11,15 +11,19 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
+import android.util.Base64
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.MultiFormatWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import de.proofseal.app.crypto.CryptoSealResult
+import de.proofseal.app.crypto.HardwareCryptoManager
 import de.proofseal.app.model.CapturedKeyframe
 import de.proofseal.app.model.ProofMode
 import de.proofseal.app.model.QrSealPayload
 import de.proofseal.app.model.SensorIntegrityReport
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.EnumMap
@@ -44,13 +48,25 @@ data class PdfGenerationRequest(
     val cryptoSeal: CryptoSealResult
 )
 
+data class PdfDirectIntegrityExtract(
+    val hasProofSealFooter: Boolean,
+    val isPdfBinaryStreamIntact: Boolean,
+    val qrPayload: QrSealPayload?,
+    val expectedPdfSha256: String,
+    val actualPdfSha256: String,
+    val pdfByteSize: Int,
+    val tamperReason: String?
+)
+
 object ProofPdfGenerator {
 
     private const val PAGE_WIDTH = 595
     private const val PAGE_HEIGHT = 842
     private const val MARGIN = 28f
 
-    // Farbschema für das druck- und bildschirmoptimierte Zertifikat
+    const val PDF_FOOTER_PREFIX = "\n%%PROOFSEAL_PAYLOAD_JSON:"
+    const val PDF_FOOTER_SUFFIX = "%%\n"
+
     private val COLOR_DARK_HEADER = Color.parseColor("#0F172A")
     private val COLOR_EMERALD_DARK = Color.parseColor("#065F46")
     private val COLOR_EMERALD_BG = Color.parseColor("#D1FAE5")
@@ -62,13 +78,39 @@ object ProofPdfGenerator {
     private val COLOR_TEXT_PRIMARY = Color.parseColor("#0F172A")
     private val COLOR_TEXT_MUTED = Color.parseColor("#475569")
     private val COLOR_CYAN_LINE = Color.parseColor("#0284C7")
-    private val COLOR_MARKER_RED = Color.parseColor("#DC2626")
 
-    fun generateProofPdf(context: Context, request: PdfGenerationRequest): File {
+    fun buildQrSealPayload(req: PdfGenerationRequest): QrSealPayload {
+        return QrSealPayload(
+            version = 2,
+            protocolId = req.protocolId,
+            timestampUtc = req.createdAtUtcIso,
+            uptimeNanos = req.sensorReport.endElapsedNanos,
+            deviceModel = req.deviceModel,
+            securityLevel = req.cryptoSeal.hardwareSecurityLevel,
+            modeTitle = req.mode.shortTitle,
+            primaryOcrValue = req.primaryOcrValue.ifBlank { "-" }.take(64),
+            imageHashes = req.keyframes.map { it.labeledShortHash },
+            keyFingerprint = req.cryptoSeal.publicKeyFingerprint,
+            parallaxScore = req.sensorReport.parallaxConfidenceScore,
+            isContinuous = req.sensorReport.isContinuous,
+            payloadHash = req.cryptoSeal.payloadSha256Hex,
+            signatureBase64 = req.cryptoSeal.signatureBase64,
+            publicKeyBase64 = req.cryptoSeal.publicKeyBase64
+        )
+    }
+
+    fun generateProofPdf(
+        context: Context,
+        request: PdfGenerationRequest,
+        cryptoManager: HardwareCryptoManager
+    ): File {
         val pdfDir = File(context.filesDir, "pdfs").apply { mkdirs() }
         val sanitizedId = request.protocolId.take(8).uppercase(Locale.ROOT)
         val outFile = File(pdfDir, "ProofSeal_${sanitizedId}_${System.currentTimeMillis()}.pdf")
 
+        val qrPayload = buildQrSealPayload(request)
+
+        val rawPdfStream = ByteArrayOutputStream()
         val pdfDocument = PdfDocument()
         try {
             // ==================== SEITE 1: VISUELLES BEWEIS-PROTOKOLL ====================
@@ -80,18 +122,169 @@ object ProofPdfGenerator {
             // ==================== SEITE 2: TECHNISCHES PRÜF-ZERTIFIKAT ====================
             val page2Info = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 2).create()
             val page2 = pdfDocument.startPage(page2Info)
-            drawPage2TechnicalCertificate(page2.canvas, request)
+            drawPage2TechnicalCertificate(page2.canvas, request, qrPayload)
             pdfDocument.finishPage(page2)
 
-            FileOutputStream(outFile).use { fos ->
-                pdfDocument.writeTo(fos)
-                fos.flush()
-            }
+            pdfDocument.writeTo(rawPdfStream)
         } finally {
             pdfDocument.close()
         }
 
+        val rawPdfBytes = rawPdfStream.toByteArray()
+        val pdfStreamSha256 = HardwareCryptoManager.sha256Hex(rawPdfBytes).lowercase(Locale.ROOT)
+        val pdfStreamSigBase64 = cryptoManager.signDigestHex(pdfStreamSha256)
+
+        // Strukturierter, kryptografisch signierter Prüf-Footer für die direkte PDF-Datei-Prüfung
+        val envelopeJson = JSONObject().apply {
+            put("qrSealJson", qrPayload.toCompactJson())
+            put("pdfStreamByteLength", rawPdfBytes.size)
+            put("pdfStreamSha256", pdfStreamSha256)
+            put("pdfStreamSignatureBase64", pdfStreamSigBase64)
+        }.toString()
+
+        val encodedEnvelope = Base64.encodeToString(
+            envelopeJson.toByteArray(Charsets.UTF_8),
+            Base64.NO_WRAP
+        )
+        val footerBytes = "$PDF_FOOTER_PREFIX$encodedEnvelope$PDF_FOOTER_SUFFIX"
+            .toByteArray(Charsets.UTF_8)
+
+        FileOutputStream(outFile).use { fos ->
+            fos.write(rawPdfBytes)
+            fos.write(footerBytes)
+            fos.flush()
+        }
+
         return outFile
+    }
+
+    /**
+     * Liest und prüft eine komplette PDF-Datei direkt anhand der eingebetteten
+     * %%PROOFSEAL_PAYLOAD_JSON:<Base64>%% Signatur-Struktur sowie des Binär-Streams.
+     */
+    fun verifyPdfFileBytes(
+        pdfBytes: ByteArray,
+        cryptoManager: HardwareCryptoManager
+    ): PdfDirectIntegrityExtract {
+        val prefixBytes = PDF_FOOTER_PREFIX.toByteArray(Charsets.UTF_8)
+        val suffixBytes = PDF_FOOTER_SUFFIX.trimEnd().toByteArray(Charsets.UTF_8)
+
+        val markerStart = lastIndexOfSubArray(pdfBytes, prefixBytes)
+        if (markerStart < 0) {
+            return PdfDirectIntegrityExtract(
+                hasProofSealFooter = false,
+                isPdfBinaryStreamIntact = false,
+                qrPayload = null,
+                expectedPdfSha256 = "-",
+                actualPdfSha256 = HardwareCryptoManager.sha256Hex(pdfBytes).take(32),
+                pdfByteSize = pdfBytes.size,
+                tamperReason = "Kein ProofSeal-Signaturblock in dieser PDF-Datei gefunden! Das Dokument wurde entweder nicht mit ProofSeal erstellt oder nachträglich mit einem externen PDF-Editor verändert und neu abgespeichert."
+            )
+        }
+
+        return try {
+            val payloadStart = markerStart + prefixBytes.size
+            val tailString = String(
+                pdfBytes,
+                payloadStart,
+                pdfBytes.size - payloadStart,
+                Charsets.UTF_8
+            )
+            val endMarkerIdx = tailString.indexOf("%%")
+            if (endMarkerIdx <= 0) {
+                return PdfDirectIntegrityExtract(
+                    hasProofSealFooter = false,
+                    isPdfBinaryStreamIntact = false,
+                    qrPayload = null,
+                    expectedPdfSha256 = "-",
+                    actualPdfSha256 = "-",
+                    pdfByteSize = pdfBytes.size,
+                    tamperReason = "Beschädigter oder unvollständiger ProofSeal-Footer im PDF!"
+                )
+            }
+
+            val base64Envelope = tailString.substring(0, endMarkerIdx).trim()
+            val envelopeJsonStr = String(
+                Base64.decode(base64Envelope, Base64.NO_WRAP),
+                Charsets.UTF_8
+            )
+            val envelopeObj = JSONObject(envelopeJsonStr)
+
+            val qrSealRawJson = envelopeObj.getString("qrSealJson")
+            val expectedByteLength = envelopeObj.optInt("pdfStreamByteLength", -1)
+            val expectedPdfSha256 = envelopeObj.optString("pdfStreamSha256", "").lowercase(Locale.ROOT)
+            val pdfStreamSigBase64 = envelopeObj.optString("pdfStreamSignatureBase64", "")
+
+            val qrPayload = QrSealPayload.fromJsonOrNull(qrSealRawJson)
+                ?: return PdfDirectIntegrityExtract(
+                    hasProofSealFooter = true,
+                    isPdfBinaryStreamIntact = false,
+                    qrPayload = null,
+                    expectedPdfSha256 = expectedPdfSha256,
+                    actualPdfSha256 = "-",
+                    pdfByteSize = pdfBytes.size,
+                    tamperReason = "Ungültiges Zertifikats-JSON im PDF-Footer!"
+                )
+
+            // Extrahiere den exakten PDF-Binärkörper vor dem Footer und berechne den SHA-256 Hash
+            val actualPdfBodyBytes = pdfBytes.copyOfRange(0, markerStart)
+            val actualPdfSha256 = HardwareCryptoManager.sha256Hex(actualPdfBodyBytes).lowercase(Locale.ROOT)
+
+            val lengthMatches = expectedByteLength == actualPdfBodyBytes.size
+            val shaMatches = expectedPdfSha256.isNotBlank() && expectedPdfSha256 == actualPdfSha256
+            val streamSigValid = cryptoManager.verifySeal(
+                payloadHash = expectedPdfSha256,
+                signatureBase64 = pdfStreamSigBase64,
+                publicKeyBase64 = qrPayload.publicKeyBase64
+            )
+
+            if (!lengthMatches || !shaMatches || !streamSigValid) {
+                return PdfDirectIntegrityExtract(
+                    hasProofSealFooter = true,
+                    isPdfBinaryStreamIntact = false,
+                    qrPayload = qrPayload,
+                    expectedPdfSha256 = expectedPdfSha256,
+                    actualPdfSha256 = actualPdfSha256,
+                    pdfByteSize = pdfBytes.size,
+                    tamperReason = "PDF-Binärstrom wurde nachträglich manipuliert! Der aktuelle PDF-Inhalts-Hash ($actualPdfSha256) weicht vom hardware-signierten Original-Hash ($expectedPdfSha256) ab."
+                )
+            }
+
+            PdfDirectIntegrityExtract(
+                hasProofSealFooter = true,
+                isPdfBinaryStreamIntact = true,
+                qrPayload = qrPayload,
+                expectedPdfSha256 = expectedPdfSha256,
+                actualPdfSha256 = actualPdfSha256,
+                pdfByteSize = pdfBytes.size,
+                tamperReason = null
+            )
+        } catch (e: Exception) {
+            PdfDirectIntegrityExtract(
+                hasProofSealFooter = false,
+                isPdfBinaryStreamIntact = false,
+                qrPayload = null,
+                expectedPdfSha256 = "-",
+                actualPdfSha256 = "-",
+                pdfByteSize = pdfBytes.size,
+                tamperReason = "Fehler beim Dekodieren des PDF-Prüfblocks: ${e.localizedMessage}"
+            )
+        }
+    }
+
+    private fun lastIndexOfSubArray(source: ByteArray, target: ByteArray): Int {
+        if (target.isEmpty() || source.size < target.size) return -1
+        for (i in source.size - target.size downTo 0) {
+            var match = true
+            for (j in target.indices) {
+                if (source[i + j] != target[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+        }
+        return -1
     }
 
     private fun drawPage1VisualProtocol(canvas: Canvas, req: PdfGenerationRequest) {
@@ -127,7 +320,6 @@ object ProofPdfGenerator {
             textSize = 7.8f
         }
 
-        // Weißer Seitenhintergrund
         fillPaint.color = Color.WHITE
         canvas.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), PAGE_HEIGHT.toFloat(), fillPaint)
 
@@ -190,20 +382,18 @@ object ProofPdfGenerator {
         var rowY = y + 15f
         val rowStep = 23f
 
-        // Zeile 1: Protokoll-ID & Titel
         drawMetaPair(canvas, col1X, rowY, "PROTOKOLL-ID (UUID)", req.protocolId, labelPaint, monoPaint)
         drawMetaPair(
             canvas,
             col2X,
             rowY,
             "BEWEIS-TITEL & MODUS",
-            "${ truncate(req.title, 28) } (${req.mode.shortTitle})",
+            "${truncate(req.title, 28)} (${req.mode.shortTitle})",
             labelPaint,
             valuePaint
         )
         rowY += rowStep
 
-        // Zeile 2: Datum/Uhrzeit & Hardware-Uptime-Spanne
         drawMetaPair(
             canvas,
             col1X,
@@ -224,7 +414,6 @@ object ProofPdfGenerator {
         )
         rowY += rowStep
 
-        // Zeile 3: Gerätemodell & Sicherheitschip-Level
         drawMetaPair(
             canvas,
             col1X,
@@ -239,13 +428,12 @@ object ProofPdfGenerator {
             col2X,
             rowY,
             "SICHERHEITSCHIP-LEVEL (KEYSTORE)",
-            req.cryptoSeal.hardwareSecurityLevel,
+            "${req.cryptoSeal.hardwareSecurityLevel} (${req.cryptoSeal.publicKeyFingerprint.take(14)}…)",
             labelPaint,
             valuePaint
         )
         rowY += rowStep
 
-        // Zeile 4: GPS-Position & 3D-Bewegungs-Score
         drawMetaPair(
             canvas,
             col1X,
@@ -271,10 +459,8 @@ object ProofPdfGenerator {
         )
         rowY += rowStep
 
-        // Trennlinie für OCR / Barcode / Notizen
         canvas.drawLine(MARGIN + 8f, rowY - 6f, PAGE_WIDTH - MARGIN - 8f, rowY - 6f, strokePaint)
 
-        // Zeile 5: Erkannte OCR / Barcode-Hauptwerte
         val ocrHeader = req.mode.primaryValueLabel.uppercase(Locale.ROOT)
         val primaryValDisplay = req.primaryOcrValue.ifBlank { "Kein Primärcode markiert" }
         val barcodeSuffix = if (req.detectedBarcodes.isNotEmpty()) {
@@ -293,7 +479,6 @@ object ProofPdfGenerator {
         )
         rowY += rowStep + 2f
 
-        // Zeile 6: Volltext-OCR-Auszug
         val ocrSnippet = req.fullOcrSummary.replace("\n", " • ").ifBlank { "Keine zusätzlichen OCR-Textblöcke erkannt" }
         drawMetaPair(
             canvas,
@@ -306,7 +491,6 @@ object ProofPdfGenerator {
         )
         rowY += rowStep + 2f
 
-        // Zeile 7: Zeuge & Nutzernotiz
         val witnessPart = if (req.witnessName.isNotBlank()) "Zeuge: ${req.witnessName} | " else ""
         val notePart = req.userNotes.ifBlank { "Keine ergänzende Freitext-Notiz hinterlegt." }
         drawMetaPair(
@@ -321,7 +505,6 @@ object ProofPdfGenerator {
 
         y += metaHeight + 14f
 
-        // 4. Sektionstitel für das 2x2 Keyframe-Raster
         val sectionTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_TEXT_PRIMARY
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -335,7 +518,6 @@ object ProofPdfGenerator {
         )
         y += 8f
 
-        // 2x2 Raster der bis zu 4 aufgenommenen Keyframes
         val gridWidth = PAGE_WIDTH - 2 * MARGIN
         val cellGap = 10f
         val cellWidth = (gridWidth - cellGap) / 2f
@@ -356,7 +538,6 @@ object ProofPdfGenerator {
 
             val kf = req.keyframes.getOrNull(slot)
             if (kf != null) {
-                // Kopfzeile des Keyframes
                 val kfHeaderRect = RectF(cellLeft, cellTop, cellLeft + cellWidth, cellTop + 20f)
                 fillPaint.color = COLOR_DARK_HEADER
                 canvas.drawRoundRect(kfHeaderRect, 5f, 5f, fillPaint)
@@ -373,7 +554,6 @@ object ProofPdfGenerator {
                     kfHeaderPaint
                 )
 
-                // Millisekunden-Offset rechtsbündig in Smaragdgrün
                 val offsetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = Color.parseColor("#34D399")
                     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
@@ -387,7 +567,6 @@ object ProofPdfGenerator {
                     offsetPaint
                 )
 
-                // Bildbereich
                 val imgArea = RectF(
                     cellLeft + 5f,
                     cellTop + 24f,
@@ -396,17 +575,16 @@ object ProofPdfGenerator {
                 )
                 drawKeyframeBitmapInRect(canvas, kf.imageFilePath, imgArea)
 
-                // Fußbereich mit individuellem SHA-256-Kurzwert & OCR-Fund
                 val footerY1 = cellTop + cellHeight - 21f
                 val footerY2 = cellTop + cellHeight - 8f
 
                 val hashLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = COLOR_TEXT_PRIMARY
                     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                    textSize = 7.2f
+                    textSize = 7.4f
                 }
                 canvas.drawText(
-                    "SHA-256: ${kf.imageSha256.take(12)}…${kf.imageSha256.takeLast(10)}",
+                    "${kf.labeledShortHash} (SHA-256)",
                     cellLeft + 6f,
                     footerY1,
                     hashLinePaint
@@ -443,7 +621,6 @@ object ProofPdfGenerator {
             }
         }
 
-        // Fußzeile Seite 1
         val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_TEXT_MUTED
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
@@ -457,7 +634,11 @@ object ProofPdfGenerator {
         )
     }
 
-    private fun drawPage2TechnicalCertificate(canvas: Canvas, req: PdfGenerationRequest) {
+    private fun drawPage2TechnicalCertificate(
+        canvas: Canvas,
+        req: PdfGenerationRequest,
+        qrPayload: QrSealPayload
+    ) {
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -480,7 +661,6 @@ object ProofPdfGenerator {
             textSize = 10.5f
         }
 
-        // Weißer Hintergrund
         fillPaint.color = Color.WHITE
         canvas.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), PAGE_HEIGHT.toFloat(), fillPaint)
 
@@ -567,7 +747,7 @@ object ProofPdfGenerator {
 
         y += 64f
 
-        // 4. Kryptografischer Signaturblock (Monospace) + Verifikations-QR-Code nebeneinander/untereinander
+        // 4. Kryptografischer Signaturblock (Monospace) + Verifikations-QR-Code
         canvas.drawText(
             "2. KRYPTOGRAFISCHER HARDWARE-SIGNATURBLOCK & VERIFIKATIONS-QR-SIEGEL",
             MARGIN,
@@ -587,26 +767,27 @@ object ProofPdfGenerator {
         val monoLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#34D399")
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            textSize = 8f
+            textSize = 7.8f
         }
         val monoBodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#E2E8F0")
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
-            textSize = 7.4f
+            textSize = 7.2f
         }
 
-        var sigY = y + 18f
+        var sigY = y + 16f
         val sigLeft = MARGIN + 10f
 
         canvas.drawText(">> KOMBINIERTER SHA-256 PAYLOAD HASH (GESAMTPAKET):", sigLeft, sigY, monoLabelPaint)
-        sigY += 12f
-        sigY = drawWrappedMonospace(canvas, req.cryptoSeal.payloadSha256Hex, sigLeft, sigY, 52, 10.5f, monoBodyPaint)
-        sigY += 6f
+        sigY += 11f
+        sigY = drawWrappedMonospace(canvas, req.cryptoSeal.payloadSha256Hex, sigLeft, sigY, 52, 9.8f, monoBodyPaint)
+        sigY += 4f
 
-        canvas.drawText(">> SENSORKETTEN-INTEGRITÄTS-HASH (SHA-256):", sigLeft, sigY, monoLabelPaint)
-        sigY += 12f
-        sigY = drawWrappedMonospace(canvas, req.sensorReport.sensorChainSha256, sigLeft, sigY, 52, 10.5f, monoBodyPaint)
-        sigY += 6f
+        canvas.drawText(">> VERSIEGELTE FOTO-KURZHASHES (IM QR-CODE VERANKERT):", sigLeft, sigY, monoLabelPaint)
+        sigY += 11f
+        val imgHashesText = qrPayload.imageHashes.joinToString(" | ")
+        sigY = drawWrappedMonospace(canvas, imgHashesText, sigLeft, sigY, 52, 9.8f, monoBodyPaint)
+        sigY += 4f
 
         canvas.drawText(
             ">> ECDSA (secp256r1 / SHA256withECDSA) HARDWARE-SIGNATUR (BASE64):",
@@ -614,18 +795,18 @@ object ProofPdfGenerator {
             sigY,
             monoLabelPaint
         )
-        sigY += 12f
-        sigY = drawWrappedMonospace(canvas, req.cryptoSeal.signatureBase64, sigLeft, sigY, 52, 10f, monoBodyPaint)
-        sigY += 6f
+        sigY += 11f
+        sigY = drawWrappedMonospace(canvas, req.cryptoSeal.signatureBase64, sigLeft, sigY, 52, 9.5f, monoBodyPaint)
+        sigY += 4f
 
         canvas.drawText(">> PUBLIC KEY FINGERPRINT (SHA-256):", sigLeft, sigY, monoLabelPaint)
-        sigY += 12f
+        sigY += 11f
         canvas.drawText(req.cryptoSeal.publicKeyFingerprint, sigLeft, sigY, monoBodyPaint)
-        sigY += 14f
+        sigY += 13f
 
         canvas.drawText(">> X.509 PUBLIC KEY (BASE64):", sigLeft, sigY, monoLabelPaint)
-        sigY += 12f
-        drawWrappedMonospace(canvas, req.cryptoSeal.publicKeyBase64, sigLeft, sigY, 52, 9.8f, monoBodyPaint)
+        sigY += 11f
+        drawWrappedMonospace(canvas, req.cryptoSeal.publicKeyBase64, sigLeft, sigY, 52, 9.5f, monoBodyPaint)
 
         // Rechts: Verifikations-QR-Code Panel
         val qrRect = RectF(
@@ -649,21 +830,7 @@ object ProofPdfGenerator {
         val qrCenterX = qrRect.centerX()
         canvas.drawText("OFFLINE-ECHTHEITSPRÜFUNG", qrCenterX, y + 18f, qrHeaderPaint)
 
-        val qrPayload = QrSealPayload(
-            version = 1,
-            protocolId = req.protocolId,
-            timestampUtc = req.createdAtUtcIso,
-            deviceModel = req.deviceModel,
-            securityLevel = req.cryptoSeal.hardwareSecurityLevel,
-            modeTitle = req.mode.shortTitle,
-            primaryOcrValue = req.primaryOcrValue.ifBlank { "-" }.take(48),
-            parallaxScore = req.sensorReport.parallaxConfidenceScore,
-            isContinuous = req.sensorReport.isContinuous,
-            payloadHash = req.cryptoSeal.payloadSha256Hex,
-            signatureBase64 = req.cryptoSeal.signatureBase64,
-            publicKeyBase64 = req.cryptoSeal.publicKeyBase64
-        )
-        val qrBitmap = generateQrCodeBitmap(qrPayload.toCompactJson(), 320)
+        val qrBitmap = generateQrCodeBitmap(qrPayload.toCompactJson(), 340)
         val qrDestRect = RectF(
             qrRect.left + 12f,
             y + 28f,
@@ -675,24 +842,24 @@ object ProofPdfGenerator {
         val qrHintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_TEXT_MUTED
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            textSize = 7.4f
+            textSize = 7.2f
             textAlign = Paint.Align.CENTER
         }
-        var hintY = qrDestRect.bottom + 14f
+        var hintY = qrDestRect.bottom + 13f
         val hintLines = listOf(
-            "Scanne diesen QR-Code im",
-            "ProofSeal 'Echtheits-Prüfer',",
-            "um die ECDSA-Signatur,",
-            "den SHA-256 Hash und die",
-            "Originaldaten mathematisch",
-            "auf Unversehrtheit zu prüfen.",
-            "",
+            "Scanne diesen QR-Code oder",
+            "lade das PDF direkt im",
+            "ProofSeal 'Echtheits-Prüfer':",
+            "• Prüft ECDSA-Signatur",
+            "• Prüft Eigenes/Fremdgerät",
+            "• Prüft alle Foto-SHA256",
+            "• Prüft PDF-Binärstrom",
             "Chip: ${req.cryptoSeal.hardwareSecurityLevel}",
             "3D-Score: ${req.sensorReport.parallaxConfidenceScore}%"
         )
         for (line in hintLines) {
             canvas.drawText(line, qrCenterX, hintY, qrHintPaint)
-            hintY += 10.5f
+            hintY += 10.2f
         }
 
         // 5. Rechtlicher Hinweis am Fußende
@@ -723,10 +890,6 @@ object ProofPdfGenerator {
         )
     }
 
-    /**
-     * Zeichnet das lückenlose Sensor-Verlaufsdiagramm auf Seite 2 mittels Canvas.drawLine
-     * inklusive vertikaler Trigger-Markierungen für jedes ausgelöste Keyframe-Foto.
-     */
     private fun drawSensorChainChart(
         canvas: Canvas,
         box: RectF,
@@ -751,7 +914,6 @@ object ProofPdfGenerator {
         val plotW = plotRight - plotLeft
         val plotH = plotBottom - plotTop
 
-        // Legende oben im Diagramm
         val legendPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -770,7 +932,6 @@ object ProofPdfGenerator {
         canvas.drawCircle(plotLeft + 320f, box.top + 14f, 4f, trigLegendDot)
         canvas.drawText("Foto-Auslösung (Keyframe-Zeitpunkt)", plotLeft + 328f, box.top + 17f, legendPaint)
 
-        // Horizontale Hilfslinien
         val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 0.6f
@@ -782,7 +943,7 @@ object ProofPdfGenerator {
             textSize = 6.8f
         }
 
-        val maxScale = 22f // 0..22 m/s²
+        val maxScale = 22f
         val steps = listOf(0f, 5f, 10f, 15f, 20f)
         for (v in steps) {
             val gy = plotBottom - (v / maxScale) * plotH
@@ -793,7 +954,6 @@ object ProofPdfGenerator {
         val points = req.sensorReport.graphPoints
         val totalDuration = req.sensorReport.durationSeconds.coerceAtLeast(0.5f)
 
-        // Zeitachsen-Beschriftung
         for (i in 0..4) {
             val frac = i / 4f
             val tx = plotLeft + frac * plotW
@@ -807,7 +967,6 @@ object ProofPdfGenerator {
             )
         }
 
-        // Kurven zeichnen mit Canvas.drawLine
         if (points.size >= 2) {
             val accelLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
@@ -831,14 +990,12 @@ object ProofPdfGenerator {
                 val ay1 = plotBottom - (p1.accelMagnitude.coerceIn(0f, maxScale) / maxScale) * plotH
                 canvas.drawLine(x0, ay0, x1, ay1, accelLinePaint)
 
-                // Gyroskop mit Faktor 4 skaliert für optimale Sichtbarkeit im gleichen Diagramm
                 val gy0 = plotBottom - ((p0.gyroMagnitude * 4f).coerceIn(0f, maxScale) / maxScale) * plotH
                 val gy1 = plotBottom - ((p1.gyroMagnitude * 4f).coerceIn(0f, maxScale) / maxScale) * plotH
                 canvas.drawLine(x0, gy0, x1, gy1, gyroLinePaint)
             }
         }
 
-        // Vertikale Markierungen für die ausgelösten Keyframes
         val markerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 1.3f
@@ -870,7 +1027,6 @@ object ProofPdfGenerator {
         if (!file.exists()) return
 
         try {
-            // Downsampling für garantiert kleines PDF (< 2.5 MB)
             val opts = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
@@ -885,7 +1041,6 @@ object ProofPdfGenerator {
             }
             val bitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOpts) ?: return
 
-            // Center-Inside / Aspect-Fit Berechnung
             val bw = bitmap.width.toFloat()
             val bh = bitmap.height.toFloat()
             val rw = targetRect.width()
@@ -908,7 +1063,7 @@ object ProofPdfGenerator {
     private fun generateQrCodeBitmap(content: String, sizePx: Int): Bitmap {
         val hints = EnumMap<EncodeHintType, Any>(EncodeHintType::class.java).apply {
             put(EncodeHintType.CHARACTER_SET, "UTF-8")
-            put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M)
+            put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.L)
             put(EncodeHintType.MARGIN, 1)
         }
         val bitMatrix = MultiFormatWriter().encode(

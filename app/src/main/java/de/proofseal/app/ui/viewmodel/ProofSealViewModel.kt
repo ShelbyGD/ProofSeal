@@ -3,8 +3,11 @@ package de.proofseal.app.ui.viewmodel
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
+import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import de.proofseal.app.crypto.HardwareCryptoManager
@@ -36,12 +39,21 @@ import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.security.spec.ECGenParameterSpec
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+
+enum class CertificateOriginStatus {
+    OWN_DEVICE,
+    FOREIGN_DEVICE,
+    TAMPERED_OR_INVALID
+}
 
 data class CaptureSessionUiState(
     val protocolId: String = UUID.randomUUID().toString(),
@@ -69,9 +81,16 @@ data class HardwareKeystoreInfo(
 
 data class SealVerificationResult(
     val isValidSignature: Boolean,
+    val originStatus: CertificateOriginStatus,
     val payload: QrSealPayload?,
     val computedKeyFingerprint: String,
+    val localDeviceKeyFingerprint: String,
     val verificationTimestamp: String,
+    val isDirectPdfCheck: Boolean = false,
+    val pdfFileName: String? = null,
+    val isPdfBinaryStreamIntact: Boolean? = null,
+    val expectedPdfSha256: String? = null,
+    val actualPdfSha256: String? = null,
     val errorReason: String? = null
 )
 
@@ -99,7 +118,9 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         SystemPreferencesUiState(
             useDynamicColor = uiPrefs.getBoolean("use_dynamic_color", false),
             themeMode = runCatching {
-                AppThemeMode.valueOf(uiPrefs.getString("theme_mode", AppThemeMode.DARK.name) ?: AppThemeMode.DARK.name)
+                AppThemeMode.valueOf(
+                    uiPrefs.getString("theme_mode", AppThemeMode.DARK.name) ?: AppThemeMode.DARK.name
+                )
             }.getOrDefault(AppThemeMode.DARK),
             defaultWitnessName = uiPrefs.getString("default_witness_name", "") ?: ""
         )
@@ -362,7 +383,7 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                         sensorReport.durationSeconds
                     )
 
-                    val deviceModel = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})"
+                    val deviceModel = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
                     val gpsText = LocationHelper.resolveCurrentLocationString(appContext)
 
                     val allBarcodes = state.capturedKeyframes
@@ -377,20 +398,23 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                         allBarcodes.firstOrNull()
                             ?: state.capturedKeyframes.firstNotNullOfOrNull { it.extractedKeyCandidate.takeIf { c -> c.isNotBlank() } }
                             ?: "Kein Code erkannt"
-                    }
+                    }.take(64)
                     val effectiveTitle = state.protocolTitle.trim().ifBlank { state.mode.title }
 
+                    val (securityLevelLabel, _) = cryptoManager.getHardwareSecurityStatus()
+                    val localKeyFingerprint = cryptoManager.getPublicKeyFingerprint()
+
+                    // Kanonisches Beweispaket inkl. aller 16-Zeichen Foto-SHA256-Kurzwerte und Geräte-Identität
                     val canonicalBytes = cryptoManager.buildCanonicalEvidencePayload(
                         protocolId = state.protocolId,
-                        modeId = state.mode.id,
+                        modeTitle = state.mode.shortTitle,
                         createdAtUtcIso = utcIso,
+                        uptimeNanos = sensorReport.endElapsedNanos,
                         deviceModel = deviceModel,
-                        gpsCoordinates = gpsText,
+                        securityLevel = securityLevelLabel,
                         primaryOcrValue = effectivePrimaryOcr,
-                        witnessName = state.witnessName,
-                        userNotes = state.userNotes,
                         keyframes = state.capturedKeyframes,
-                        sensorReport = sensorReport
+                        keyFingerprint = localKeyFingerprint
                     )
 
                     val cryptoSeal = cryptoManager.signPayload(canonicalBytes)
@@ -413,7 +437,11 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                         sensorReport = sensorReport,
                         cryptoSeal = cryptoSeal
                     )
-                    val pdfFile = ProofPdfGenerator.generateProofPdf(appContext, pdfReq)
+                    val pdfFile = ProofPdfGenerator.generateProofPdf(
+                        context = appContext,
+                        request = pdfReq,
+                        cryptoManager = cryptoManager
+                    )
 
                     val kfJsonArr = JSONArray()
                     state.capturedKeyframes.forEach { kfJsonArr.put(it.toJson()) }
@@ -425,7 +453,7 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
                         protocolId = state.protocolId,
                         title = effectiveTitle,
                         modeId = state.mode.id,
-                        modeTitle = state.mode.title,
+                        modeTitle = state.mode.shortTitle,
                         createdAtEpochMillis = System.currentTimeMillis(),
                         createdAtUtcIso = utcIso,
                         createdAtFormatted = localFormatted,
@@ -479,50 +507,285 @@ class ProofSealViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Prüft ein gescanntes QR-Code-JSON mathematisch auf:
+     * 1. Kanonische Feld- & Bild-Hash-Integrität + ECDSA-Signatur
+     * 2. Geräte-Herkunft ("Eigenes Gerät" vs. "Fremdgerät")
+     */
     fun verifyScannedQrContent(rawQrText: String) {
         val nowFormatted = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
             .withZone(ZoneId.systemDefault())
             .format(Instant.now())
+        val localFp = cryptoManager.getPublicKeyFingerprint()
 
         val parsedPayload = QrSealPayload.fromJsonOrNull(rawQrText)
         if (parsedPayload == null) {
             _verificationResult.value = SealVerificationResult(
                 isValidSignature = false,
+                originStatus = CertificateOriginStatus.TAMPERED_OR_INVALID,
                 payload = null,
                 computedKeyFingerprint = "-",
+                localDeviceKeyFingerprint = localFp,
                 verificationTimestamp = nowFormatted,
                 errorReason = "Kein gültiges ProofSeal-Zertifikats-JSON im QR-Code erkannt."
             )
             return
         }
 
-        val isValid = cryptoManager.verifySeal(
-            payloadHash = parsedPayload.payloadHash,
-            signatureBase64 = parsedPayload.signatureBase64,
-            publicKeyBase64 = parsedPayload.publicKeyBase64
-        )
+        val (isValid, tamperError) = cryptoManager.verifyQrPayloadIntegrity(parsedPayload)
 
-        val keyFingerprint = try {
-            val pubBytes = android.util.Base64.decode(
-                parsedPayload.publicKeyBase64.trim(),
-                android.util.Base64.NO_WRAP
-            )
+        val certKeyFingerprint = try {
+            val pubBytes = Base64.decode(parsedPayload.publicKeyBase64.trim(), Base64.NO_WRAP)
             HardwareCryptoManager.formatFingerprint(pubBytes)
         } catch (_: Exception) {
-            "UNBEKANNT"
+            parsedPayload.keyFingerprint.ifBlank { "UNBEKANNT" }
+        }
+
+        val isOwnDevice = isValid && cryptoManager.isSignedByThisDevice(
+            certPublicKeyBase64 = parsedPayload.publicKeyBase64,
+            certKeyFingerprint = certKeyFingerprint
+        )
+
+        val originStatus = when {
+            !isValid -> CertificateOriginStatus.TAMPERED_OR_INVALID
+            isOwnDevice -> CertificateOriginStatus.OWN_DEVICE
+            else -> CertificateOriginStatus.FOREIGN_DEVICE
         }
 
         _verificationResult.value = SealVerificationResult(
             isValidSignature = isValid,
+            originStatus = originStatus,
             payload = parsedPayload,
-            computedKeyFingerprint = keyFingerprint,
+            computedKeyFingerprint = certKeyFingerprint,
+            localDeviceKeyFingerprint = localFp,
             verificationTimestamp = nowFormatted,
-            errorReason = if (isValid) {
-                null
-            } else {
-                "Kryptografischer Signaturbruch! Hash oder ECDSA-Signatur stimmt nicht mit dem Public Key überein."
-            }
+            isDirectPdfCheck = false,
+            errorReason = tamperError
         )
+    }
+
+    /**
+     * Prüft eine vom Nutzer ausgewählte PDF-Datei (z. B. aus WhatsApp oder Downloads)
+     * direkt auf ihren eingebetteten %%PROOFSEAL_PAYLOAD_JSON%% Block, den Binärstrom-Hash,
+     * die ECDSA-Signatur und die Geräte-Herkunft.
+     */
+    fun verifyPdfDocumentUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val fileName = resolveUriFileName(uri) ?: "Dokument.pdf"
+                val pdfBytes = try {
+                    appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } catch (_: Exception) {
+                    null
+                }
+                if (pdfBytes == null || pdfBytes.isEmpty()) {
+                    return@withContext createFailedPdfVerificationResult(
+                        fileName = fileName,
+                        reason = "Die ausgewählte PDF-Datei konnte nicht gelesen werden."
+                    )
+                }
+                evaluatePdfBytes(pdfBytes, fileName)
+            }
+            _verificationResult.value = result
+        }
+    }
+
+    fun verifyLocalPdfFile(file: File, simulateBinaryTamper: Boolean = false) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (!file.exists()) {
+                    return@withContext createFailedPdfVerificationResult(
+                        fileName = file.name,
+                        reason = "PDF-Datei nicht im Speicher gefunden."
+                    )
+                }
+                val rawBytes = file.readBytes()
+                val bytesToTest = if (simulateBinaryTamper && rawBytes.size > 120) {
+                    rawBytes.clone().also { copy ->
+                        // Manipuliere 1 Byte mitten im PDF-Dokumentenstrom (vor dem Footer)
+                        copy[rawBytes.size / 2] = (copy[rawBytes.size / 2].toInt() xor 0xFF).toByte()
+                    }
+                } else {
+                    rawBytes
+                }
+                evaluatePdfBytes(
+                    pdfBytes = bytesToTest,
+                    fileName = if (simulateBinaryTamper) "${file.name} (1 Byte manipuliert)" else file.name
+                )
+            }
+            _verificationResult.value = result
+        }
+    }
+
+    /**
+     * Erzeugt zu Demonstrations- und Testzwecken ein mathematisch gültiges Zertifikat
+     * eines simulierten Fremdgeräts (mit eigenem flüchtigem EC-Schlüsselpaar),
+     * damit die "Fremdgerät"-Erkennung sofort getestet werden kann.
+     */
+    fun simulateForeignDeviceCertificate() {
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val kpg = KeyPairGenerator.getInstance("EC")
+                kpg.initialize(ECGenParameterSpec("secp256r1"))
+                val foreignKeyPair = kpg.generateKeyPair()
+
+                val foreignPubBytes = foreignKeyPair.public.encoded
+                val foreignPubBase64 = Base64.encodeToString(foreignPubBytes, Base64.NO_WRAP)
+                val foreignFp = HardwareCryptoManager.formatFingerprint(foreignPubBytes)
+
+                val protocolId = UUID.randomUUID().toString()
+                val nowUtc = DateTimeFormatter.ISO_INSTANT.format(Instant.now().atOffset(ZoneOffset.UTC))
+                val uptimeNs = SystemClock.elapsedRealtimeNanos()
+                val foreignDevice = "Google Pixel 9 Pro (Externes Gerät)"
+                val secLevel = "StrongBox Hardware-SE"
+                val modeTitle = "Paket & Verkauf"
+                val ocrVal = "DHL-0034043429184721"
+                val imgHashes = listOf(
+                    "IMG1: 4F8A901C2B3E4D5F",
+                    "IMG2: 9C1B77E204A811D3",
+                    "IMG3: 3E72F8910C4B55A2",
+                    "IMG4: 8A19D4E672B0C3F1"
+                )
+
+                val canonicalBytes = HardwareCryptoManager.buildCanonicalSealBytes(
+                    protocolId = protocolId,
+                    timestampUtc = nowUtc,
+                    uptimeNanos = uptimeNs,
+                    deviceModel = foreignDevice,
+                    securityLevel = secLevel,
+                    modeTitle = modeTitle,
+                    ocrPrimaryValue = ocrVal,
+                    imageHashes = imgHashes,
+                    keyFingerprint = foreignFp
+                )
+                val payloadHash = HardwareCryptoManager.sha256Hex(canonicalBytes).lowercase(Locale.ROOT)
+
+                val signer = Signature.getInstance("SHA256withECDSA")
+                signer.initSign(foreignKeyPair.private)
+                signer.update(payloadHash.toByteArray(Charsets.UTF_8))
+                val foreignSigBase64 = Base64.encodeToString(signer.sign(), Base64.NO_WRAP)
+
+                val foreignPayload = QrSealPayload(
+                    version = 2,
+                    protocolId = protocolId,
+                    timestampUtc = nowUtc,
+                    uptimeNanos = uptimeNs,
+                    deviceModel = foreignDevice,
+                    securityLevel = secLevel,
+                    modeTitle = modeTitle,
+                    primaryOcrValue = ocrVal,
+                    imageHashes = imgHashes,
+                    keyFingerprint = foreignFp,
+                    parallaxScore = 91,
+                    isContinuous = true,
+                    payloadHash = payloadHash,
+                    signatureBase64 = foreignSigBase64,
+                    publicKeyBase64 = foreignPubBase64
+                )
+
+                withContext(Dispatchers.Main) {
+                    verifyScannedQrContent(foreignPayload.toCompactJson())
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun evaluatePdfBytes(pdfBytes: ByteArray, fileName: String): SealVerificationResult {
+        val nowFormatted = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.now())
+        val localFp = cryptoManager.getPublicKeyFingerprint()
+
+        val pdfExtract = ProofPdfGenerator.verifyPdfFileBytes(pdfBytes, cryptoManager)
+        val payload = pdfExtract.qrPayload
+
+        if (!pdfExtract.hasProofSealFooter || !pdfExtract.isPdfBinaryStreamIntact || payload == null) {
+            val certFp = payload?.keyFingerprint?.ifBlank { "-" } ?: "-"
+            return SealVerificationResult(
+                isValidSignature = false,
+                originStatus = CertificateOriginStatus.TAMPERED_OR_INVALID,
+                payload = payload,
+                computedKeyFingerprint = certFp,
+                localDeviceKeyFingerprint = localFp,
+                verificationTimestamp = nowFormatted,
+                isDirectPdfCheck = true,
+                pdfFileName = fileName,
+                isPdfBinaryStreamIntact = false,
+                expectedPdfSha256 = pdfExtract.expectedPdfSha256,
+                actualPdfSha256 = pdfExtract.actualPdfSha256,
+                errorReason = pdfExtract.tamperReason ?: "PDF-Integritätsprüfung fehlgeschlagen."
+            )
+        }
+
+        val (isPayloadValid, payloadError) = cryptoManager.verifyQrPayloadIntegrity(payload)
+        val certKeyFingerprint = try {
+            val pubBytes = Base64.decode(payload.publicKeyBase64.trim(), Base64.NO_WRAP)
+            HardwareCryptoManager.formatFingerprint(pubBytes)
+        } catch (_: Exception) {
+            payload.keyFingerprint
+        }
+
+        val overallValid = isPayloadValid && pdfExtract.isPdfBinaryStreamIntact
+        val isOwnDevice = overallValid && cryptoManager.isSignedByThisDevice(
+            certPublicKeyBase64 = payload.publicKeyBase64,
+            certKeyFingerprint = certKeyFingerprint
+        )
+
+        val originStatus = when {
+            !overallValid -> CertificateOriginStatus.TAMPERED_OR_INVALID
+            isOwnDevice -> CertificateOriginStatus.OWN_DEVICE
+            else -> CertificateOriginStatus.FOREIGN_DEVICE
+        }
+
+        return SealVerificationResult(
+            isValidSignature = overallValid,
+            originStatus = originStatus,
+            payload = payload,
+            computedKeyFingerprint = certKeyFingerprint,
+            localDeviceKeyFingerprint = localFp,
+            verificationTimestamp = nowFormatted,
+            isDirectPdfCheck = true,
+            pdfFileName = fileName,
+            isPdfBinaryStreamIntact = pdfExtract.isPdfBinaryStreamIntact,
+            expectedPdfSha256 = pdfExtract.expectedPdfSha256,
+            actualPdfSha256 = pdfExtract.actualPdfSha256,
+            errorReason = payloadError
+        )
+    }
+
+    private fun createFailedPdfVerificationResult(
+        fileName: String,
+        reason: String
+    ): SealVerificationResult {
+        val nowFormatted = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.now())
+        return SealVerificationResult(
+            isValidSignature = false,
+            originStatus = CertificateOriginStatus.TAMPERED_OR_INVALID,
+            payload = null,
+            computedKeyFingerprint = "-",
+            localDeviceKeyFingerprint = cryptoManager.getPublicKeyFingerprint(),
+            verificationTimestamp = nowFormatted,
+            isDirectPdfCheck = true,
+            pdfFileName = fileName,
+            isPdfBinaryStreamIntact = false,
+            errorReason = reason
+        )
+    }
+
+    private fun resolveUriFileName(uri: Uri): String? {
+        return try {
+            appContext.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && cursor.moveToFirst()) {
+                    cursor.getString(nameIndex)
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun clearVerificationResult() {

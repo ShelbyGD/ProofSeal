@@ -8,6 +8,7 @@ import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.util.Base64
 import de.proofseal.app.model.CapturedKeyframe
+import de.proofseal.app.model.QrSealPayload
 import de.proofseal.app.model.SensorIntegrityReport
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
@@ -20,6 +21,7 @@ import java.security.spec.X509EncodedKeySpec
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 data class CryptoSealResult(
     val payloadSha256Hex: String,
@@ -50,6 +52,36 @@ class HardwareCryptoManager(private val context: Context) {
             val digest = MessageDigest.getInstance("SHA-256").digest(publicKeyBytes)
             return digest.take(16).joinToString(":") { "%02X".format(it) }
         }
+
+        /**
+         * Erzeugt das deterministische, kanonische ByteArray über alle im QR-Code
+         * und PDF verankerten Sicherheitsfelder. Jede Änderung an einem dieser Felder
+         * verändert zwingend den resultierenden SHA-256 Payload Hash.
+         */
+        fun buildCanonicalSealBytes(
+            protocolId: String,
+            timestampUtc: String,
+            uptimeNanos: Long,
+            deviceModel: String,
+            securityLevel: String,
+            modeTitle: String,
+            ocrPrimaryValue: String,
+            imageHashes: List<String>,
+            keyFingerprint: String
+        ): ByteArray {
+            val sb = StringBuilder()
+            sb.append("PROOFSEAL_CANONICAL_SEAL_V2\n")
+            sb.append("PROTOCOL_ID=").append(protocolId.trim()).append('\n')
+            sb.append("TIMESTAMP_UTC=").append(timestampUtc.trim()).append('\n')
+            sb.append("UPTIME_NANOS=").append(uptimeNanos).append('\n')
+            sb.append("DEVICE_MODEL=").append(deviceModel.trim()).append('\n')
+            sb.append("SECURITY_LEVEL=").append(securityLevel.trim()).append('\n')
+            sb.append("MODE_TITLE=").append(modeTitle.trim()).append('\n')
+            sb.append("OCR_PRIMARY=").append(ocrPrimaryValue.trim()).append('\n')
+            sb.append("IMAGE_HASHES=").append(imageHashes.joinToString("|") { it.trim() }).append('\n')
+            sb.append("KEY_FINGERPRINT=").append(keyFingerprint.trim().uppercase(Locale.ROOT)).append('\n')
+            return sb.toString().toByteArray(Charsets.UTF_8)
+        }
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -65,7 +97,6 @@ class HardwareCryptoManager(private val context: Context) {
 
     @Synchronized
     private fun generateHardwareKeyPair(): Boolean {
-        // 1. Versuch: Echtes StrongBox Hardware-SE (dedizierter Sicherheitschip)
         try {
             val kpg = KeyPairGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_EC,
@@ -76,15 +107,11 @@ class HardwareCryptoManager(private val context: Context) {
             kpg.generateKeyPair()
             prefs.edit().putBoolean(PREF_STRONGBOX_ACTIVE, true).apply()
             return true
-        } catch (e: StrongBoxUnavailableException) {
-            // Sauberer Fallback auf Standard-TEE
-        } catch (e: ProviderException) {
-            // Manche OEMs werfen ProviderException / KeyStoreException wenn StrongBox fehlt
-        } catch (e: Exception) {
-            // Allgemeiner Fallback auf Standard-TEE
+        } catch (_: StrongBoxUnavailableException) {
+        } catch (_: ProviderException) {
+        } catch (_: Exception) {
         }
 
-        // 2. Fallback: Standard-TEE (Trusted Execution Environment) im AndroidKeyStore
         val kpgFallback = KeyPairGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_EC,
             ANDROID_KEYSTORE
@@ -118,7 +145,7 @@ class HardwareCryptoManager(private val context: Context) {
             } else {
                 prefs.getBoolean(PREF_STRONGBOX_ACTIVE, false)
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             prefs.getBoolean(PREF_STRONGBOX_ACTIVE, false)
         }
     }
@@ -128,7 +155,7 @@ class HardwareCryptoManager(private val context: Context) {
         val label = if (strongBox) {
             "StrongBox Hardware-SE"
         } else {
-            "Standard TEE (Hardware Keystore)"
+            "Standard TEE"
         }
         return label to strongBox
     }
@@ -139,13 +166,40 @@ class HardwareCryptoManager(private val context: Context) {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
             val cert = keyStore.getCertificate(KEY_ALIAS) ?: return "UNVERFÜGBAR"
             formatFingerprint(cert.publicKey.encoded)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             "KEYSTORE-INIT-ERROR"
         }
     }
 
+    fun getPublicKeyBase64(): String {
+        return try {
+            ensureKeyPairInitialized()
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val cert = keyStore.getCertificate(KEY_ALIAS) ?: return ""
+            Base64.encodeToString(cert.publicKey.encoded, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     /**
-     * Berechnet den SHA-256 Hash über das gesamte Beweispaket und signiert diesen
+     * Prüft, ob das übergebene Zertifikat (Public Key / Fingerprint) vom Hardware-Keystore
+     * exakt DIESES Smartphones stammt ("Eigenes Gerät" vs. "Fremdgerät").
+     */
+    fun isSignedByThisDevice(certPublicKeyBase64: String, certKeyFingerprint: String): Boolean {
+        val localPubBase64 = getPublicKeyBase64().trim()
+        val localFp = getPublicKeyFingerprint().trim().uppercase(Locale.ROOT)
+        if (localPubBase64.isNotEmpty() && certPublicKeyBase64.trim() == localPubBase64) {
+            return true
+        }
+        if (localFp.isNotEmpty() && certKeyFingerprint.trim().uppercase(Locale.ROOT) == localFp) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Berechnet den SHA-256 Hash über das kanonische Beweispaket und signiert diesen
      * deterministisch mit SHA256withECDSA (secp256r1) über den Android Hardware-Keystore.
      */
     @Synchronized
@@ -159,11 +213,9 @@ class HardwareCryptoManager(private val context: Context) {
                 keyStore.getEntry(KEY_ALIAS, null) as KeyStore.PrivateKeyEntry
             }
 
-        // 1. SHA-256 Hash über das gesamte Beweispaket (Hex-String, lowercase)
-        val payloadHashHex = sha256Hex(payloadBytes).lowercase()
+        val payloadHashHex = sha256Hex(payloadBytes).lowercase(Locale.ROOT)
         val canonicalHashBytes = payloadHashHex.toByteArray(Charsets.UTF_8)
 
-        // 2. Hardware-gestützte Signatur mit SHA256withECDSA
         val signature = Signature.getInstance(SIGNATURE_ALGORITHM)
         signature.initSign(privateKeyEntry.privateKey)
         signature.update(canonicalHashBytes)
@@ -194,9 +246,23 @@ class HardwareCryptoManager(private val context: Context) {
     }
 
     /**
+     * Signiert einen bereits berechneten SHA-256 Hex-String (z. B. den Binär-Hash des PDF-Dokumentenstroms)
+     * direkt mit dem Hardware-Keystore-Schlüssel.
+     */
+    @Synchronized
+    fun signDigestHex(digestHex: String): String {
+        ensureKeyPairInitialized()
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val privateKeyEntry = keyStore.getEntry(KEY_ALIAS, null) as KeyStore.PrivateKeyEntry
+        val signature = Signature.getInstance(SIGNATURE_ALGORITHM)
+        signature.initSign(privateKeyEntry.privateKey)
+        signature.update(digestHex.trim().lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(signature.sign(), Base64.NO_WRAP)
+    }
+
+    /**
      * Prüft lokal (offline) anhand des Payload-Hashes, der ECDSA-Signatur (Base64)
-     * und des X.509 Public Keys (Base64), ob das Zertifikat mathematisch authentisch
-     * und unverändert ist.
+     * und des X.509 Public Keys (Base64), ob die mathematische ECDSA-Signatur gültig ist.
      */
     fun verifySeal(
         payloadHash: String,
@@ -207,7 +273,7 @@ class HardwareCryptoManager(private val context: Context) {
             return false
         }
         return try {
-            val normalizedHashBytes = payloadHash.trim().lowercase().toByteArray(Charsets.UTF_8)
+            val normalizedHashBytes = payloadHash.trim().lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
             val signatureBytes = Base64.decode(signatureBase64.trim(), Base64.NO_WRAP)
             val publicKeyBytes = Base64.decode(publicKeyBase64.trim(), Base64.NO_WRAP)
 
@@ -218,50 +284,91 @@ class HardwareCryptoManager(private val context: Context) {
             verifier.initVerify(publicKey)
             verifier.update(normalizedHashBytes)
             verifier.verify(signatureBytes)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
 
     /**
-     * Erzeugt das kanonische Beweispaket (ByteArray) aus allen protokollierten Daten,
-     * Keyframe-Bildhashes, Sensorketten-Digest, Hardware-Uptime und OCR-Werten.
+     * Vollständige zweistufige Integritätsprüfung eines QrSealPayload:
+     * 1. Prüft bei v2-Zertifikaten, ob der aus den Datenfeldern (Protokoll-ID, UTC, Uptime,
+     *    Gerät, Security-Level, Modus, OCR-Wert, Bild-Hashes, Key-Fingerprint) neu berechnete
+     *    SHA-256 exakt mit payloadHash übereinstimmt (verhindert jede Manipulation einzelner JSON-Felder!).
+     * 2. Prüft die mathematische ECDSA-Hardware-Signatur über payloadHash.
+     */
+    fun verifyQrPayloadIntegrity(payload: QrSealPayload): Pair<Boolean, String?> {
+        // 1. Prüfe Fingerprint-Konsistenz zum enthaltenen Public Key
+        val derivedFp = try {
+            val pubBytes = Base64.decode(payload.publicKeyBase64.trim(), Base64.NO_WRAP)
+            formatFingerprint(pubBytes)
+        } catch (_: Exception) {
+            return false to "Ungültiges Public-Key-Format im Zertifikat."
+        }
+
+        if (payload.keyFingerprint.isNotBlank() &&
+            !payload.keyFingerprint.equals(derivedFp, ignoreCase = true)
+        ) {
+            return false to "Key-Fingerprint stimmt nicht mit dem eingebetteten Public Key überein!"
+        }
+
+        // 2. Bei Schema v2: Berechne den kanonischen SHA-256 Hash über alle Pflichtfelder nach
+        if (payload.version >= 2) {
+            val canonicalBytes = buildCanonicalSealBytes(
+                protocolId = payload.protocolId,
+                timestampUtc = payload.timestampUtc,
+                uptimeNanos = payload.uptimeNanos,
+                deviceModel = payload.deviceModel,
+                securityLevel = payload.securityLevel,
+                modeTitle = payload.modeTitle,
+                ocrPrimaryValue = payload.primaryOcrValue,
+                imageHashes = payload.imageHashes,
+                keyFingerprint = derivedFp
+            )
+            val recomputedHash = sha256Hex(canonicalBytes).lowercase(Locale.ROOT)
+            if (recomputedHash != payload.payloadHash.trim().lowercase(Locale.ROOT)) {
+                return false to "Datenmanipulation erkannt! Die Zertifikatsfelder (OCR, Bild-Hashes oder Metadaten) weichen vom signierten SHA-256 Payload Hash ab."
+            }
+        }
+
+        // 3. Mathematische ECDSA-Signaturprüfung
+        val ecdsaOk = verifySeal(
+            payloadHash = payload.payloadHash,
+            signatureBase64 = payload.signatureBase64,
+            publicKeyBase64 = payload.publicKeyBase64
+        )
+        if (!ecdsaOk) {
+            return false to "Mathematischer ECDSA-Signaturbruch! Die Hardware-Signatur ist ungültig."
+        }
+
+        return true to null
+    }
+
+    /**
+     * Erzeugt das kanonische Beweispaket (ByteArray) über alle Pflichtfelder inkl.
+     * der individuellen 16-Zeichen SHA-256 Kurz-Hashes aller aufgenommenen Fotos.
      */
     fun buildCanonicalEvidencePayload(
         protocolId: String,
-        modeId: String,
+        modeTitle: String,
         createdAtUtcIso: String,
+        uptimeNanos: Long,
         deviceModel: String,
-        gpsCoordinates: String,
+        securityLevel: String,
         primaryOcrValue: String,
-        witnessName: String,
-        userNotes: String,
         keyframes: List<CapturedKeyframe>,
-        sensorReport: SensorIntegrityReport
+        keyFingerprint: String
     ): ByteArray {
-        val sb = StringBuilder()
-        sb.append("PROOFSEAL_V1_CANONICAL_PAYLOAD\n")
-        sb.append("PROTOCOL_ID=").append(protocolId).append('\n')
-        sb.append("MODE=").append(modeId).append('\n')
-        sb.append("UTC=").append(createdAtUtcIso).append('\n')
-        sb.append("DEVICE=").append(deviceModel).append('\n')
-        sb.append("UPTIME_START_NS=").append(sensorReport.startElapsedNanos).append('\n')
-        sb.append("UPTIME_END_NS=").append(sensorReport.endElapsedNanos).append('\n')
-        sb.append("SENSOR_CHAIN_SHA256=").append(sensorReport.sensorChainSha256).append('\n')
-        sb.append("PARALLAX_SCORE=").append(sensorReport.parallaxConfidenceScore).append('\n')
-        sb.append("CONTINUOUS=").append(sensorReport.isContinuous).append('\n')
-        sb.append("GPS=").append(gpsCoordinates).append('\n')
-        sb.append("PRIMARY_OCR=").append(primaryOcrValue.trim()).append('\n')
-        sb.append("WITNESS=").append(witnessName.trim()).append('\n')
-        sb.append("NOTES=").append(userNotes.trim()).append('\n')
-        keyframes.forEach { kf ->
-            sb.append("KF_").append(kf.index)
-                .append("|OFFSET_MS=").append(kf.offsetMillis)
-                .append("|UPTIME_NS=").append(kf.elapsedRealtimeNanos)
-                .append("|SHA256=").append(kf.imageSha256)
-                .append("|OCR=").append(kf.extractedKeyCandidate)
-                .append('\n')
-        }
-        return sb.toString().toByteArray(Charsets.UTF_8)
+        val imageHashes = keyframes.map { it.labeledShortHash }
+        return buildCanonicalSealBytes(
+            protocolId = protocolId,
+            timestampUtc = createdAtUtcIso,
+            uptimeNanos = uptimeNanos,
+            deviceModel = deviceModel,
+            securityLevel = securityLevel,
+            modeTitle = modeTitle,
+            ocrPrimaryValue = primaryOcrValue,
+            imageHashes = imageHashes,
+            keyFingerprint = keyFingerprint
+        )
     }
 }

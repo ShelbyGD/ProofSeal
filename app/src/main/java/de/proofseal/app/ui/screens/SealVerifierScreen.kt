@@ -32,19 +32,26 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DevicesOther
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,9 +80,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import de.proofseal.app.ui.viewmodel.CertificateOriginStatus
 import de.proofseal.app.ui.viewmodel.ProofSealViewModel
 import de.proofseal.app.ui.viewmodel.SealVerificationResult
 import de.proofseal.app.util.MlKitAnalyzerHelper
+import java.io.File
+import java.util.Locale
 import java.util.concurrent.Executors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,6 +136,7 @@ fun SealVerifierTabContent(
 
     val verificationResult by viewModel.verificationResult.collectAsState()
     val savedRecords by viewModel.records.collectAsState()
+    val hardwareInfo by viewModel.hardwareInfo.collectAsState()
 
     var manualJsonInput by remember { mutableStateOf("") }
     var hasCameraPermission by remember {
@@ -141,6 +152,15 @@ fun SealVerifierTabContent(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
+    }
+
+    // SAF-Dateiwähler für direkte PDF-Datei-Integritätsprüfung (WhatsApp / Downloads)
+    val pdfPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.verifyPdfDocumentUri(uri)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -164,7 +184,7 @@ fun SealVerifierTabContent(
             .animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Header-Info-Card im Material 3 Tonal-Stil
+        // 1. Header-Card + Prominenter "PDF-Datei direkt prüfen (WhatsApp / Downloads)" Button
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -172,38 +192,66 @@ fun SealVerifierTabContent(
                 containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
             )
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Surface(
-                    modifier = Modifier.size(48.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(26.dp)
+                    Surface(
+                        modifier = Modifier.size(48.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Kryptografischer Siegel- & PDF-Prüfer",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Prüft QR-Siegel & PDF-Dateien auf ECDSA-Hardware-Signatur, Bild-Hashes und Geräte-Herkunft.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Spacer(modifier = Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Kryptografischer Siegel-Prüfer",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+
+                Button(
+                    onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(vertical = 13.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PictureAsPdf,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Prüft QR-Siegel von ProofSeal-PDFs mathematisch via SHA256withECDSA (secp256r1).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "PDF-Datei direkt prüfen (WhatsApp / Downloads)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 }
             }
@@ -229,7 +277,7 @@ fun SealVerifierTabContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Kamera-Scanner",
+                            text = "Live QR-Siegel-Scanner",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -350,21 +398,25 @@ fun SealVerifierTabContent(
                 onSimulateTamper = {
                     val orig = verificationResult?.payload
                     if (orig != null) {
-                        val tamperedHash = if (orig.payloadHash.startsWith("a")) {
-                            "b" + orig.payloadHash.drop(1)
+                        // Simuliere einen manipulierten Foto-Hash im QR-Code (z. B. ausgetauschtes Bild)
+                        val tamperedImages = if (orig.imageHashes.isNotEmpty()) {
+                            listOf("IMG1: FFFF0000DEAD9999") + orig.imageHashes.drop(1)
                         } else {
-                            "a" + orig.payloadHash.drop(1)
+                            listOf("IMG1: FFFF0000DEAD9999")
                         }
-                        val tamperedPayload = orig.copy(payloadHash = tamperedHash)
+                        val tamperedPayload = orig.copy(imageHashes = tamperedImages)
                         val tamperedJson = tamperedPayload.toCompactJson()
                         manualJsonInput = tamperedJson
                         viewModel.verifyScannedQrContent(tamperedJson)
                     }
+                },
+                onSimulateForeignDevice = {
+                    viewModel.simulateForeignDeviceCertificate()
                 }
             )
         }
 
-        // 3. Direkt-Prüfung & Selbsttest Card
+        // 3. Direkt-Prüfung, Manipulations-Simulation & Einzelgerät-Selbsttest Card
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -378,23 +430,30 @@ fun SealVerifierTabContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Direkt-Prüfung & Einzelgerät-Selbsttest",
+                    text = "Direkt-Prüfung & Sicherheits-Selbsttest",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Teste ein lokal gespeichertes Protokoll oder füge den JSON-Inhalt eines QR-Siegels manuell ein.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Eigener Hardware-Key dieses Geräts: ${hardwareInfo.publicKeyFingerprint}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 if (savedRecords.isNotEmpty()) {
                     val latest = savedRecords.first()
+                    val latestPdfFile = File(latest.pdfFilePath)
+
                     FilledTonalButton(
                         onClick = {
-                            val qrJson = latest.toQrSealPayload().toCompactJson()
-                            manualJsonInput = qrJson
-                            viewModel.verifyScannedQrContent(qrJson)
+                            if (latestPdfFile.exists()) {
+                                viewModel.verifyLocalPdfFile(latestPdfFile, simulateBinaryTamper = false)
+                            } else {
+                                val qrJson = latest.toQrSealPayload().toCompactJson()
+                                manualJsonInput = qrJson
+                                viewModel.verifyScannedQrContent(qrJson)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp)
@@ -406,17 +465,76 @@ fun SealVerifierTabContent(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Letztes eigenes Protokoll (${latest.title}) prüfen",
+                            text = "Letzte eigene PDF (${latest.title}) komplett prüfen",
                             fontWeight = FontWeight.SemiBold
                         )
                     }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (latestPdfFile.exists()) {
+                                    viewModel.verifyLocalPdfFile(latestPdfFile, simulateBinaryTamper = true)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "PDF-Manipulation",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.simulateForeignDeviceCertificate() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DevicesOther,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Fremdgerät-Test",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { viewModel.simulateForeignDeviceCertificate() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DevicesOther,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Fremdgerät-Signatur simulieren & prüfen")
+                    }
                 }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
 
                 OutlinedTextField(
                     value = manualJsonInput,
                     onValueChange = { manualJsonInput = it },
-                    label = { Text("QR-Siegel JSON-Payload") },
-                    placeholder = { Text("{\"app\":\"ProofSeal\",\"v\":1,\"hash\":\"…\"}") },
+                    label = { Text("QR-Siegel JSON-Payload manuell prüfen") },
+                    placeholder = { Text("{\"app\":\"ProofSeal\",\"v\":2,\"hash\":\"…\"}") },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
                     maxLines = 4,
@@ -431,7 +549,7 @@ fun SealVerifierTabContent(
                     contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
                     Text(
-                        text = "ECDSA-Signatur mathematisch verifizieren",
+                        text = "ECDSA-Signatur & Bild-Hashes verifizieren",
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -444,18 +562,44 @@ fun SealVerifierTabContent(
 private fun VerificationResultMaterial3Card(
     result: SealVerificationResult,
     onResetScanner: () -> Unit,
-    onSimulateTamper: () -> Unit
+    onSimulateTamper: () -> Unit,
+    onSimulateForeignDevice: () -> Unit
 ) {
-    val isValid = result.isValidSignature
-    val bannerContainer = if (isValid) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.errorContainer
-    }
-    val bannerContent = if (isValid) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onErrorContainer
+    // Farben & Texte exakt nach den 3 Sicherheits-Zuständen:
+    // 1. OWN_DEVICE (Smaragdgrün)
+    // 2. FOREIGN_DEVICE (Blau/Bernstein Info-Warnung)
+    // 3. TAMPERED_OR_INVALID (Rotes Alarm-Badge)
+    val badgeBgColor: Color
+    val badgeBorderColor: Color
+    val badgeTextColor: Color
+    val badgeTitle: String
+    val badgeSubtitle: String
+    val badgeIcon = when (result.originStatus) {
+        CertificateOriginStatus.OWN_DEVICE -> {
+            badgeBgColor = Color(0xFF064E3B)
+            badgeBorderColor = Color(0xFF10B981)
+            badgeTextColor = Color(0xFFECFDF5)
+            badgeTitle = "✅ SIGNIERT VON DIESEM GERÄT (Eigenes Original-Zertifikat)"
+            badgeSubtitle = "Der öffentliche ECDSA-Schlüssel im Zertifikat stimmt zu 100 % mit dem lokalen Hardware-Keystore dieses Smartphones überein. Alle Daten & Bild-Hashes sind unversehrt."
+            Icons.Default.CheckCircle
+        }
+        CertificateOriginStatus.FOREIGN_DEVICE -> {
+            badgeBgColor = Color(0xFF1E3A8A)
+            badgeBorderColor = Color(0xFFF59E0B)
+            badgeTextColor = Color(0xFFFEF3C7)
+            badgeTitle = "ℹ️ GÜLTIGE SIGNATUR EINES FREMDGERÄTS"
+            badgeSubtitle = "Die ECDSA-Signatur und alle Bild-Hashes sind mathematisch unversehrt, wurden jedoch von einem ANDEREN Smartphone erzeugt. Vergleiche unten den fremden Key-Fingerprint!"
+            Icons.Default.WarningAmber
+        }
+        CertificateOriginStatus.TAMPERED_OR_INVALID -> {
+            badgeBgColor = Color(0xFF7F1D1D)
+            badgeBorderColor = Color(0xFFEF4444)
+            badgeTextColor = Color(0xFFFEE2E2)
+            badgeTitle = "🚨 WARNUNG: SIGNATUR GEBROCHEN – DATEN WURDEN MANIPULIERT!"
+            badgeSubtitle = result.errorReason
+                ?: "Kryptografischer Signatur- oder Hash-Bruch! Mindestens ein Feld, ein Foto-Hash oder die PDF-Datei wurde nachträglich verändert."
+            Icons.Default.Error
+        }
     }
 
     ElevatedCard(
@@ -472,10 +616,12 @@ private fun VerificationResultMaterial3Card(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Großes Top-Badge (Eigenes Gerät vs. Fremdgerät vs. Manipuliert)
             Surface(
-                color = bannerContainer,
-                contentColor = bannerContent,
+                color = badgeBgColor,
+                contentColor = badgeTextColor,
                 shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(2.dp, badgeBorderColor),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -484,36 +630,126 @@ private fun VerificationResultMaterial3Card(
                 ) {
                     Surface(
                         shape = CircleShape,
-                        color = bannerContent.copy(alpha = 0.15f),
-                        modifier = Modifier.size(44.dp)
+                        color = badgeBorderColor.copy(alpha = 0.25f),
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = if (isValid) Icons.Default.CheckCircle else Icons.Default.Error,
+                                imageVector = badgeIcon,
                                 contentDescription = null,
-                                tint = bannerContent,
-                                modifier = Modifier.size(28.dp)
+                                tint = badgeBorderColor,
+                                modifier = Modifier.size(30.dp)
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(14.dp))
                     Column {
                         Text(
-                            text = if (isValid) {
-                                "Signatur mathematisch gültig"
-                            } else {
-                                "Signaturbruch erkannt!"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold
+                            text = badgeTitle,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = badgeTextColor
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = badgeSubtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = badgeTextColor.copy(alpha = 0.92f)
+                        )
+                    }
+                }
+            }
+
+            // Falls Direkt-Prüfung einer PDF-Datei: Binärstrom-Status anzeigen
+            if (result.isDirectPdfCheck) {
+                val pdfOk = result.isPdfBinaryStreamIntact == true
+                Surface(
+                    color = if (pdfOk) {
+                        Color(0xFF065F46).copy(alpha = 0.25f)
+                    } else {
+                        Color(0xFF7F1D1D).copy(alpha = 0.3f)
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (pdfOk) Color(0xFF10B981) else Color(0xFFEF4444)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PictureAsPdf,
+                                contentDescription = null,
+                                tint = if (pdfOk) Color(0xFF10B981) else Color(0xFFEF4444),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (pdfOk) {
+                                    "PDF-Binärstrom 100 % original (${result.pdfFileName ?: "PDF"})"
+                                } else {
+                                    "PDF-Datei binär verändert oder unversiegelt (${result.pdfFileName ?: "PDF"})"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (!result.expectedPdfSha256.isNullOrBlank()) {
+                            Text(
+                                text = "Signierter PDF-Hash: ${result.expectedPdfSha256.take(32)}…",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        if (!result.actualPdfSha256.isNullOrBlank()) {
+                            Text(
+                                text = "Aktueller PDF-Hash:  ${result.actualPdfSha256.take(32)}…",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Hervorhebung bei FREMDGERÄT: Direkter Vergleich Fremd-Key vs. Eigenes Gerät
+            if (result.originStatus == CertificateOriginStatus.FOREIGN_DEVICE && result.payload != null) {
+                Surface(
+                    color = Color(0xFF78350F).copy(alpha = 0.28f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Herkunfts-Abgleich: Fremdgerät erkannt",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFFBBF24)
                         )
                         Text(
-                            text = if (isValid) {
-                                "ECDSA (secp256r1) Signatur bestätigt Originalität und Unversehrtheit."
-                            } else {
-                                result.errorReason ?: "Daten oder Signatur wurden verändert."
-                            },
-                            style = MaterialTheme.typography.bodySmall
+                            text = "Gerätemodell laut Zertifikat: ${result.payload.deviceModel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Fremder Key-Fingerprint:\n${result.computedKeyFingerprint}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFFFDE68A)
+                        )
+                        Text(
+                            text = "Eigener Key-Fingerprint (dieses Gerät):\n${result.localDeviceKeyFingerprint}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -521,24 +757,125 @@ private fun VerificationResultMaterial3Card(
 
             val p = result.payload
             if (p != null) {
-                M3VerifiedItem("Zertifizierter OCR-/Barcode-Wert", p.primaryOcrValue, highlight = true)
-                M3VerifiedItem("Protokoll-ID (UUID)", p.protocolId, mono = true)
-                M3VerifiedItem("Zeitstempel (UTC)", p.timestampUtc, mono = true)
-                M3VerifiedItem("Aufnahmegerät", p.deviceModel)
-                M3VerifiedItem("Hardware-Sicherheitslevel", p.securityLevel)
                 M3VerifiedItem(
-                    "Sensorkette & 3D-Parallaxe",
-                    "${p.parallaxScore}% 3D-Score • ${if (p.isContinuous) "Lückenlos" else "Lücke gemeldet"}"
+                    label = "Zertifizierter OCR-/Barcode-Hauptwert (${p.modeTitle})",
+                    value = p.primaryOcrValue,
+                    highlight = true
                 )
-                M3VerifiedItem("SHA-256 Payload Hash", p.payloadHash, mono = true)
-                M3VerifiedItem("Public Key Fingerprint", result.computedKeyFingerprint, mono = true)
+
+                // Versiegelte Foto-Prüfsummen (SHA-256 Kurz-Hashes) prominent auflisten
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PhotoLibrary,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Versiegelte Foto-Prüfsummen (${p.imageHashes.size} Bilder verankert)",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = "Jedes Beweisfoto auf Seite 1 des PDFs ist mit seinem SHA-256 Kurzwert in der ECDSA-Signatur verankert:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (p.imageHashes.isEmpty()) {
+                            Text(
+                                text = "Keine individuellen Bild-Hashes im älteren v1-Siegel enthalten",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        } else {
+                            p.imageHashes.forEachIndexed { idx, imgHash ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Foto #${idx + 1} SHA-256",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = imgHash,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val uptimeSec = String.format(Locale.US, "%.2f s", p.uptimeNanos / 1_000_000_000.0)
+                M3VerifiedItem(
+                    label = "Zeitstempel (UTC) & Monotone Uptime",
+                    value = "${p.timestampUtc} • Uptime $uptimeSec",
+                    mono = true
+                )
+                M3VerifiedItem(
+                    label = "Aufnahmegerät (Hardware-gebunden)",
+                    value = p.deviceModel
+                )
+                M3VerifiedItem(
+                    label = "Sicherheits-Chip-Level",
+                    value = p.securityLevel
+                )
+                M3VerifiedItem(
+                    label = "Sensorkette & 3D-Parallaxe",
+                    value = "${p.parallaxScore}% 3D-Score • ${if (p.isContinuous) "Lückenlose Kette" else "Lücke gemeldet"}"
+                )
+                M3VerifiedItem(
+                    label = "Protokoll-ID (UUID)",
+                    value = p.protocolId,
+                    mono = true
+                )
+                M3VerifiedItem(
+                    label = "Unterzeichnender Key-Fingerprint",
+                    value = result.computedKeyFingerprint,
+                    mono = true
+                )
+                M3VerifiedItem(
+                    label = "SHA-256 Kanonischer Payload-Hash",
+                    value = p.payloadHash,
+                    mono = true
+                )
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (isValid && result.payload != null) {
+                if (result.isValidSignature && result.payload != null) {
                     OutlinedButton(
                         onClick = onSimulateTamper,
                         modifier = Modifier.weight(1f),
@@ -550,7 +887,21 @@ private fun VerificationResultMaterial3Card(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Manipulation testen")
+                        Text("Bild-Hash brechen", style = MaterialTheme.typography.labelMedium)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onSimulateForeignDevice,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DevicesOther,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Fremdgerät testen", style = MaterialTheme.typography.labelMedium)
                     }
                 }
 
@@ -565,7 +916,7 @@ private fun VerificationResultMaterial3Card(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Neuer Scan")
+                    Text("Neuer Scan", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
